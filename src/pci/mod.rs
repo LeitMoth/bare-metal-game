@@ -1,6 +1,12 @@
 use headers::{half_u32, parse_header_common, parse_header_type0};
-use io::{pci_config_modify, pci_config_read_u32, pci_config_read_word, pci_config_write_u32};
-use pluggable_interrupt_os::println;
+use io::{
+    io_space_bar_read, io_space_bar_write, pci_config_modify, pci_config_read_u32,
+    pci_config_read_word, pci_config_write_u32,
+};
+use lazy_static::lazy_static;
+use pluggable_interrupt_os::{print, println};
+use spin::Mutex;
+use x86_64::instructions::port::Port;
 
 mod headers;
 mod io;
@@ -12,17 +18,102 @@ As well as other linked references
 */
 
 pub fn init_pci() {
-    check_all();
+    // check_all();
+    let a = init_audio().unwrap();
 
-    init_audio();
+    a.play();
+}
+
+lazy_static! {
+    static ref SAMPLE: [i16; 128] = {
+        let mut x = [0; 128];
+        for i in 0..(x.len() / 2) {
+            x[i] = i16::MAX;
+        }
+
+        x
+    };
+}
+
+#[repr(packed)]
+#[derive(Debug, Default, Clone, Copy)]
+struct BufferDescriptor {
+    physical_addr: u32,
+    num_samples: u16,
+    // From https://wiki.osdev.org/AC97#Buffer%20Descriptor%20List
+    // Bit 15=Interrupt fired when data from this entry is transferred
+    // Bit 14=Last entry of buffer, stop playing
+    // Other bits=Reserved
+    control: u16,
+}
+
+impl BufferDescriptor {
+    fn square() -> Self {
+        let raw_addr: *const [i16; 128] = &raw const *SAMPLE;
+
+        debug_assert!(raw_addr as u64 <= u32::MAX as u64);
+        let addr_truncated = raw_addr as u32;
+
+        BufferDescriptor {
+            physical_addr: addr_truncated,
+            num_samples: 128,
+            control: 1 << 15,
+        }
+    }
+}
+
+lazy_static! {
+    static ref BUFFER_DESCRIPTOR_LIST: Mutex<[BufferDescriptor; 32]> =
+        Mutex::new([BufferDescriptor::square(); 32]);
 }
 
 #[derive(Debug)]
 struct AudioAc97 {
     bus: u8,
     slot: u8,
+    // reset, device selection, volume control
     bar0: u32,
+    // audio data
     bar1: u32,
+}
+
+impl AudioAc97 {
+    fn play(&self) {
+        // TODO(colin): figure out what is happening here
+        // I am going off of the bottom of this page
+        // https://wiki.osdev.org/AC97
+        // but I can't seem to write anything properly,
+        // when I read back b I just get 255
+        println!("Setting reset bit of audio...");
+        let address_reset = (self.bar1 & 0xFFFFFFFC) + 0x10 + 0x0B;
+        io_space_bar_write::<u8>(address_reset, 2);
+        let b = io_space_bar_read::<u8>(address_reset);
+        print!("[{b}");
+
+        loop {
+            let b = io_space_bar_read::<u8>(address_reset);
+            print!("[{b}");
+            if io_space_bar_read::<u8>(address_reset) & 0b10 > 0 {
+                println!("Bit was cleared!");
+                break;
+            }
+        }
+
+        println!("Writing BDL pos");
+        let address = (self.bar1 & 0xFFFFFFFC) + 0x10 + 0x0;
+        let mut l = BUFFER_DESCRIPTOR_LIST.lock();
+        let raw_addr: *mut [BufferDescriptor; 32] = &raw mut *l;
+        debug_assert!(raw_addr as u64 <= u32::MAX as u64);
+        let addr_truncated = raw_addr as u32;
+        io_space_bar_write(address, addr_truncated);
+
+        println!("Writing number of last valid buffer");
+        let address_last_valid_idx = (self.bar1 & 0xFFFFFFFC) + 0x10 + 0x05;
+        io_space_bar_write::<u8>(address_last_valid_idx, 31);
+
+        println!("Setting bit for transferring data");
+        io_space_bar_write::<u8>(address_reset, 1);
+    }
 }
 
 fn init_audio() -> Option<AudioAc97> {

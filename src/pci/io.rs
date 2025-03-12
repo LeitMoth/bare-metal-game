@@ -1,4 +1,7 @@
-use x86_64::instructions::port::Port;
+use x86_64::{
+    instructions::port::Port,
+    structures::port::{PortRead, PortWrite},
+};
 
 const CONFIG_ADDRESS: u16 = 0xCF8;
 const CONFIG_DATA: u16 = 0xCFC;
@@ -86,4 +89,20 @@ pub fn pci_config_modify(bus: u8, slot: u8, func: u8, register: u8, f: impl Fn(u
     tmp = f(tmp);
 
     unsafe { config_data_port.write(tmp) }
+}
+
+pub fn io_space_bar_write<T: PortWrite>(address: u32, value: T) {
+    let mut config_address_port = Port::new(CONFIG_ADDRESS);
+    unsafe { config_address_port.write(address) };
+
+    let mut config_data_port = Port::new(CONFIG_DATA);
+    unsafe { config_data_port.write(value) };
+}
+
+pub fn io_space_bar_read<T: PortRead>(address: u32) -> T {
+    let mut config_address_port = Port::new(CONFIG_ADDRESS);
+    unsafe { config_address_port.write(address) };
+
+    let mut config_data_port = Port::new(CONFIG_DATA);
+    unsafe { config_data_port.read() }
 }
