@@ -121,7 +121,7 @@ fn check_all() {
         for device in 0..32 {
             let v = pci_check_vendor(bus, device);
             if let Some(id) = v.id() {
-                print!("[{:X}]", id)
+                println!("<{bus}><{device}>[{:X}]", id)
             }
         }
     }
@@ -131,6 +131,7 @@ pub fn init_pci() {
     check_all();
 }
 
+#[derive(Debug)]
 struct PciHeaderCommon {
     device_id: u16,
     vendor_id: u16,
@@ -149,9 +150,52 @@ struct PciHeaderCommon {
     cache_line_size: u8,
 }
 
-fn parse_header(bus: u8, slot: u8, func: u8) {
-    let vendor_id = pci_config_read_word(bus, slot, func, 0x0);
-    let device_id = pci_config_read_word(bus, slot, func, 0x2);
-    let device_status = pci_config_read_word(bus, slot, func, 0x4);
-    let command = pci_config_read_word(bus, slot, func, 0x6);
+fn half_u32(x: u32) -> (u16, u16) {
+    let low = x & 0xFFFF;
+    let high = (x >> 16) & 0xFFFF;
+    (low as u16, high as u16)
+}
+
+fn half_u16(x: u16) -> (u8, u8) {
+    let low = x & 0xFF;
+    let high = (x >> 8) & 0xFF;
+    (low as u8, high as u8)
+}
+
+fn quarter_u32(mut x: u32) -> (u8, u8, u8, u8) {
+    let b0 = (x & 0xFF) as u8;
+    x >>= 8;
+    let b1 = (x & 0xFF) as u8;
+    x >>= 8;
+    let b2 = (x & 0xFF) as u8;
+    x >>= 8;
+    let b3 = (x & 0xFF) as u8;
+
+    debug_assert!(x >> 8 == 0);
+
+    (b0, b1, b2, b3)
+}
+
+fn parse_header(bus: u8, slot: u8, func: u8) -> PciHeaderCommon {
+    let (device_id, vendor_id) = half_u32(pci_config_read_u32(bus, slot, func, 0));
+    let (status, command) = half_u32(pci_config_read_u32(bus, slot, func, 1));
+    let (class_code, subclass, prog_if, revision_id) =
+        quarter_u32(pci_config_read_u32(bus, slot, func, 2));
+    let (built_in_self_test, header_type, latency_timer, cache_line_size) =
+        quarter_u32(pci_config_read_u32(bus, slot, func, 3));
+
+    PciHeaderCommon {
+        device_id,
+        vendor_id,
+        status,
+        command,
+        class_code,
+        subclass,
+        prog_if,
+        revision_id,
+        built_in_self_test,
+        header_type,
+        latency_timer,
+        cache_line_size,
+    }
 }
