@@ -1,5 +1,5 @@
 use headers::{half_u32, parse_header_common, parse_header_type0};
-use io::{pci_config_read_u32, pci_config_read_word, pci_config_write_u32};
+use io::{pci_config_modify, pci_config_read_u32, pci_config_read_word, pci_config_write_u32};
 use pluggable_interrupt_os::println;
 
 mod headers;
@@ -97,15 +97,9 @@ fn check_all() {
                         println!("{:#013b}", h.headhead.command);
 
                         // https://wiki.osdev.org/AC97#Detecting_AC97_sound_card
-                        // We are supposed to enable
-                        let mut line =
-                            ((h.headhead.status as u32) << 16) | (h.headhead.command as u32);
-                        line |= 0b101;
-
-                        pci_config_write_u32(bus, device, 0, 0x1, line);
+                        pci_config_modify(bus, device, 0, 0x1, |x| x | 0b101);
 
                         let (_, command) = half_u32(pci_config_read_u32(bus, device, 0, 1));
-
                         println!("{:#013b}", command);
                     }
                 }
