@@ -125,6 +125,12 @@ fn check_all() {
             }
         }
     }
+
+    // for i in 0..1 {
+    let i = 3;
+    let h = parse_header(0, i, 0);
+    println!("{h:#X?}");
+    // }
 }
 
 pub fn init_pci() {
@@ -150,16 +156,20 @@ struct PciHeaderCommon {
     cache_line_size: u8,
 }
 
+// Here we return the the tuple
+// as if we split the binary representation of
+// the number in half:
+// high place values on left, low place values on right
 fn half_u32(x: u32) -> (u16, u16) {
     let low = x & 0xFFFF;
     let high = (x >> 16) & 0xFFFF;
-    (low as u16, high as u16)
+    (high as u16, low as u16)
 }
 
 fn half_u16(x: u16) -> (u8, u8) {
     let low = x & 0xFF;
     let high = (x >> 8) & 0xFF;
-    (low as u8, high as u8)
+    (high as u8, low as u8)
 }
 
 fn quarter_u32(mut x: u32) -> (u8, u8, u8, u8) {
@@ -173,7 +183,7 @@ fn quarter_u32(mut x: u32) -> (u8, u8, u8, u8) {
 
     debug_assert!(x >> 8 == 0);
 
-    (b0, b1, b2, b3)
+    (b3, b2, b1, b0)
 }
 
 fn parse_header(bus: u8, slot: u8, func: u8) -> PciHeaderCommon {
