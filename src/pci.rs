@@ -121,16 +121,16 @@ fn check_all() {
         for device in 0..32 {
             let v = pci_check_vendor(bus, device);
             if let Some(id) = v.id() {
-                println!("<{bus}><{device}>[{:X}]", id)
+                let h = parse_header(bus, device, 0);
+                debug_assert!(id == h.vendor_id);
+
+                println!(
+                    "BUS{bus}   DEVICE{device}   V:D {:#X}:{:#X}    CLS:SUBCLS {:#X}:{:#X}",
+                    h.vendor_id, h.device_id, h.class_code, h.subclass,
+                );
             }
         }
     }
-
-    // for i in 0..1 {
-    let i = 3;
-    let h = parse_header(0, i, 0);
-    println!("{h:#X?}");
-    // }
 }
 
 pub fn init_pci() {
@@ -143,7 +143,7 @@ struct PciHeaderCommon {
     vendor_id: u16,
 
     status: u16,
-    command: u16, /* display binary */
+    command: u16,
 
     class_code: u8,
     subclass: u8,

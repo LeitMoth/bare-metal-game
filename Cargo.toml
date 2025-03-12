@@ -23,4 +23,5 @@ default-features = false
 [package.metadata.bootimage]
 # The command invoked with the created bootimage (the "{}" will be replaced
 # with the path to the bootable disk image)
-run-command = ["qemu-system-x86_64", "-drive", "format=raw,file={}"]
+run-command = ["qemu-system-x86_64", "-device", "AC97", "-drive", "format=raw,file={}"]
+# run-command = ["qemu-system-x86_64", "-audiodev", "pipewire,id=pipewire1", "-device", "AC97,audiodev=pipewire1", "-drive", "format=raw,file={}"]
