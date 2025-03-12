@@ -49,15 +49,15 @@ fn pci_config_read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
     ((tmp >> sel_hi_shift) & 0xFFFF) as u16
 }
 
-fn pci_config_read_u32(bus: u8, slot: u8, func: u8, u32_array_index: u8) -> u32 {
+fn pci_config_read_u32(bus: u8, slot: u8, func: u8, register: u8) -> u32 {
     debug_assert!(slot <= 0b00011111);
     debug_assert!(func <= 0b00000111);
-    debug_assert!(u32_array_index <= (256 / 4) as u8);
+    debug_assert!(register <= (256 / 4) as u8);
 
     let lbus = bus as u32;
     let lslot = slot as u32;
     let lfunc = func as u32;
-    let loffset = (u32_array_index as u32) * 4;
+    let loffset = (register as u32) * 4;
 
     let address = (1 << 31) | (lbus << 16) | (lslot << 11) | (lfunc << 8) | loffset;
 
@@ -66,6 +66,25 @@ fn pci_config_read_u32(bus: u8, slot: u8, func: u8, u32_array_index: u8) -> u32 
 
     let mut inl = Port::new(0xCFC);
     unsafe { inl.read() }
+}
+
+fn pci_config_write_u32(bus: u8, slot: u8, func: u8, register: u8, value: u32) {
+    debug_assert!(slot <= 0b00011111);
+    debug_assert!(func <= 0b00000111);
+    debug_assert!(register <= (256 / 4) as u8);
+
+    let lbus = bus as u32;
+    let lslot = slot as u32;
+    let lfunc = func as u32;
+    let loffset = (register as u32) * 4;
+
+    let address = (1 << 31) | (lbus << 16) | (lslot << 11) | (lfunc << 8) | loffset;
+
+    let mut outl = Port::new(0xCF8);
+    unsafe { outl.write(address) };
+
+    let mut inl = Port::new(0xCFC);
+    unsafe { inl.write(value) };
 }
 
 /*
@@ -121,13 +140,34 @@ fn check_all() {
         for device in 0..32 {
             let v = pci_check_vendor(bus, device);
             if let Some(id) = v.id() {
-                let h = parse_header(bus, device, 0);
+                let h = parse_header_common(bus, device, 0);
                 debug_assert!(id == h.vendor_id);
 
                 println!(
-                    "BUS{bus}   DEVICE{device}   V:D {:#X}:{:#X}    CLS:SUBCLS {:#X}:{:#X}",
-                    h.vendor_id, h.device_id, h.class_code, h.subclass,
+                    "BUS{bus}   DEVICE{device}   V:D {:#06X}:{:#06X}    CLS:SUBCLS {:#04X}:{:#04X}   HTY{:#04X}",
+                    h.vendor_id, h.device_id, h.class_code, h.subclass, h.header_type
                 );
+
+                if h.header_type == 0 {
+                    let h = parse_header_type0(bus, device, 0, h);
+
+                    if h.headhead.class_code == 0x4 {
+                        // println!("{h:#X?}");
+                        println!("{:#013b}", h.headhead.command);
+
+                        // https://wiki.osdev.org/AC97#Detecting_AC97_sound_card
+                        // We are supposed to enable
+                        let mut line =
+                            ((h.headhead.status as u32) << 16) | (h.headhead.command as u32);
+                        line |= 0b101;
+
+                        pci_config_write_u32(bus, device, 0, 0x1, line);
+
+                        let (_, command) = half_u32(pci_config_read_u32(bus, device, 0, 1));
+
+                        println!("{:#013b}", command);
+                    }
+                }
             }
         }
     }
@@ -154,6 +194,28 @@ struct PciHeaderCommon {
     header_type: u8,
     latency_timer: u8,
     cache_line_size: u8,
+}
+
+#[derive(Debug)]
+struct PciHeaderType0 {
+    headhead: PciHeaderCommon,
+
+    base_addresses: [u32; 6],
+
+    cardbus_cis_pointer: u32,
+
+    subsystem_id: u16,
+    subsystem_vendor_id: u16,
+
+    expansion_rom_base_address: u32,
+
+    /* some reserved space */
+    capabilites_pointer: u8,
+    /* some reserved space */
+    max_latency: u8,
+    min_grant: u8,
+    interrupt_pin: u8,
+    interrupt_line: u8,
 }
 
 // Here we return the the tuple
@@ -186,7 +248,7 @@ fn quarter_u32(mut x: u32) -> (u8, u8, u8, u8) {
     (b3, b2, b1, b0)
 }
 
-fn parse_header(bus: u8, slot: u8, func: u8) -> PciHeaderCommon {
+fn parse_header_common(bus: u8, slot: u8, func: u8) -> PciHeaderCommon {
     let (device_id, vendor_id) = half_u32(pci_config_read_u32(bus, slot, func, 0));
     let (status, command) = half_u32(pci_config_read_u32(bus, slot, func, 1));
     let (class_code, subclass, prog_if, revision_id) =
@@ -207,5 +269,38 @@ fn parse_header(bus: u8, slot: u8, func: u8) -> PciHeaderCommon {
         header_type,
         latency_timer,
         cache_line_size,
+    }
+}
+
+fn parse_header_type0(bus: u8, slot: u8, func: u8, headhead: PciHeaderCommon) -> PciHeaderType0 {
+    let base_addresses = [
+        pci_config_read_u32(bus, slot, func, 0x4),
+        pci_config_read_u32(bus, slot, func, 0x5),
+        pci_config_read_u32(bus, slot, func, 0x6),
+        pci_config_read_u32(bus, slot, func, 0x7),
+        pci_config_read_u32(bus, slot, func, 0x8),
+        pci_config_read_u32(bus, slot, func, 0x9),
+    ];
+    let cardbus_cis_pointer = pci_config_read_u32(bus, slot, func, 0xA);
+    let (subsystem_id, subsystem_vendor_id) = half_u32(pci_config_read_u32(bus, slot, func, 0xB));
+    let expansion_rom_base_address = pci_config_read_u32(bus, slot, func, 0xC);
+
+    let (_, _, _, capabilites_pointer) = quarter_u32(pci_config_read_u32(bus, slot, func, 0xD));
+
+    let (max_latency, min_grant, interrupt_pin, interrupt_line) =
+        quarter_u32(pci_config_read_u32(bus, slot, func, 0xF));
+
+    PciHeaderType0 {
+        headhead,
+        base_addresses,
+        cardbus_cis_pointer,
+        subsystem_id,
+        subsystem_vendor_id,
+        expansion_rom_base_address,
+        capabilites_pointer,
+        max_latency,
+        min_grant,
+        interrupt_pin,
+        interrupt_line,
     }
 }
