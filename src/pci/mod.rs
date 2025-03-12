@@ -13,10 +13,56 @@ As well as other linked references
 
 pub fn init_pci() {
     check_all();
+
+    init_audio();
+}
+
+#[derive(Debug)]
+struct AudioAc97 {
+    bus: u8,
+    slot: u8,
+    bar0: u32,
+    bar1: u32,
+}
+
+fn init_audio() -> Option<AudioAc97> {
+    let mut audio = None;
+
+    for bus in 0..=255 {
+        for device in 0..32 {
+            let vendor = pci_config_read_word(bus, device, 0, 0);
+            if vendor != 0xFFFF {
+                let headhead = parse_header_common(bus, device, 0);
+                debug_assert!(vendor == headhead.vendor_id);
+
+                if headhead.header_type == 0x0
+                    && headhead.class_code == 0x04
+                    && headhead.subclass == 0x01
+                {
+                    // because header_type == 0, we know that this is a single function device
+                    // (otherwise bit 7 would be set)
+                    let full_header = parse_header_type0(bus, device, 0, headhead);
+
+                    #[cfg(debug_assertions)]
+                    if audio.is_some() {
+                        println!("Warning, found multiple AC97 devices!");
+                    }
+
+                    audio = Some(AudioAc97 {
+                        bus,
+                        slot: device,
+                        bar0: full_header.base_addresses[0],
+                        bar1: full_header.base_addresses[0],
+                    });
+                }
+            }
+        }
+    }
+
+    audio
 }
 
 struct Vendor(u16);
-
 impl Vendor {
     fn id(&self) -> Option<u16> {
         if self.0 == 0xFFFF {
@@ -26,24 +72,9 @@ impl Vendor {
         }
     }
 }
-
 fn pci_check_vendor(bus: u8, slot: u8) -> Vendor {
     Vendor(pci_config_read_word(bus, slot, 0, 0))
 }
-
-/*
-
- void checkAllBuses(void) {
-     uint16_t bus;
-     uint8_t device;
-
-     for (bus = 0; bus < 256; bus++) {
-         for (device = 0; device < 32; device++) {
-             checkDevice(bus, device);
-         }
-     }
- }
-*/
 
 fn check_all() {
     for bus in 0..=255 {
