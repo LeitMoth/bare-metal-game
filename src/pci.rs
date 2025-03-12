@@ -1,3 +1,4 @@
+// https://wiki.osdev.org/PCI
 /*
 
 uint16_t pciConfigReadWord(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
@@ -24,13 +25,17 @@ uint16_t pciConfigReadWord(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offs
 use pluggable_interrupt_os::{print, println};
 use x86_64::instructions::port::Port;
 
+// slot and device seem to be used interchangably here
 fn pci_config_read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
+    debug_assert!(slot <= 0b00011111);
+    debug_assert!(func <= 0b00000111);
+
     let lbus = bus as u32;
     let lslot = slot as u32;
     let lfunc = func as u32;
     let loffset = offset as u32;
 
-    let address = (lbus << 16) | (lslot << 1) | (lfunc << 8) | (loffset & 0xFC) | (0x80000000u32);
+    let address = (lbus << 16) | (lslot << 11) | (lfunc << 8) | (loffset & 0xFC) | (0x80000000u32);
 
     let mut outl = Port::new(0xCF8);
     unsafe { outl.write(address) };
@@ -42,6 +47,25 @@ fn pci_config_read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
     // println!("=0x{:X} >> 0x{:X}", tmp, sel_hi_shift);
 
     ((tmp >> sel_hi_shift) & 0xFFFF) as u16
+}
+
+fn pci_config_read_u32(bus: u8, slot: u8, func: u8, u32_array_index: u8) -> u32 {
+    debug_assert!(slot <= 0b00011111);
+    debug_assert!(func <= 0b00000111);
+    debug_assert!(u32_array_index <= (256 / 4) as u8);
+
+    let lbus = bus as u32;
+    let lslot = slot as u32;
+    let lfunc = func as u32;
+    let loffset = (u32_array_index as u32) * 4;
+
+    let address = (1 << 31) | (lbus << 16) | (lslot << 11) | (lfunc << 8) | loffset;
+
+    let mut outl = Port::new(0xCF8);
+    unsafe { outl.write(address) };
+
+    let mut inl = Port::new(0xCFC);
+    unsafe { inl.read() }
 }
 
 /*
@@ -105,4 +129,29 @@ fn check_all() {
 
 pub fn init_pci() {
     check_all();
+}
+
+struct PciHeaderCommon {
+    device_id: u16,
+    vendor_id: u16,
+
+    status: u16,
+    command: u16, /* display binary */
+
+    class_code: u8,
+    subclass: u8,
+    prog_if: u8,
+    revision_id: u8,
+
+    built_in_self_test: u8,
+    header_type: u8,
+    latency_timer: u8,
+    cache_line_size: u8,
+}
+
+fn parse_header(bus: u8, slot: u8, func: u8) {
+    let vendor_id = pci_config_read_word(bus, slot, func, 0x0);
+    let device_id = pci_config_read_word(bus, slot, func, 0x2);
+    let device_status = pci_config_read_word(bus, slot, func, 0x4);
+    let command = pci_config_read_word(bus, slot, func, 0x6);
 }
