@@ -23,7 +23,11 @@ static LAST_KEY: AtomicCell<Option<DecodedKey>> = AtomicCell::new(None);
 static TICKED: AtomicCell<bool> = AtomicCell::new(false);
 
 fn cpu_loop() -> ! {
-    loop {}
+    loop {
+        if let Ok(_) = TICKED.compare_exchange(true, false) {
+            // println!("Ticked!")
+        }
+    }
 }
 
 fn cpu_loop2() -> ! {

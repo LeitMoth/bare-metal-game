@@ -20,7 +20,6 @@ As well as other linked references
 pub fn init_pci() {
     // check_all();
     let a = init_audio().unwrap();
-
     a.play();
 }
 
@@ -57,7 +56,7 @@ impl BufferDescriptor {
         BufferDescriptor {
             physical_addr: addr_truncated,
             num_samples: 128,
-            control: 1 << 15,
+            control: 0,
         }
     }
 }
@@ -72,47 +71,82 @@ struct AudioAc97 {
     bus: u8,
     slot: u8,
     // reset, device selection, volume control
-    bar0: u32,
+    bar0: u16,
     // audio data
-    bar1: u32,
+    bar1: u16,
 }
 
 impl AudioAc97 {
     fn play(&self) {
+        pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x | 0b101);
+
+        // io_space_bar_write::<u16>(self.bar0 + 0x00, 0x0);
+        // io_space_bar_write::<u16>(self.bar0 + 0x02, 0x0);
+        // io_space_bar_write::<u16>(self.bar0 + 0x04, 0x0);
+        // io_space_bar_write::<u16>(self.bar0 + 0x18, 0x0);
+        // io_space_bar_write::<u16>(self.bar1 + 0x2C, 0b11);
+        let mut v = 10;
+        for i in 0..100000 {
+            v -= 1;
+            print!("");
+        }
+        let x = io_space_bar_read::<u16>(self.bar0 + 0x18);
+        println!("pcm {x:#X}");
+
+        // pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x | 0b101);
+        println!("{self:#X?}");
         // TODO(colin): figure out what is happening here
         // I am going off of the bottom of this page
         // https://wiki.osdev.org/AC97
         // but I can't seem to write anything properly,
         // when I read back b I just get 255
         println!("Setting reset bit of audio...");
-        let address_reset = (self.bar1 & 0xFFFFFFFC) + 0x10 + 0x0B;
+        let address_reset = self.bar1 + 0x1B;
         io_space_bar_write::<u8>(address_reset, 2);
+        // pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x & !0b11);
         let b = io_space_bar_read::<u8>(address_reset);
         print!("[{b}");
 
         loop {
             let b = io_space_bar_read::<u8>(address_reset);
-            print!("[{b}");
-            if io_space_bar_read::<u8>(address_reset) & 0b10 > 0 {
-                println!("Bit was cleared!");
+            println!("[{b}");
+            if io_space_bar_read::<u8>(address_reset) & 0b10 == 0 {
+                // println!("Bit was cleared!");
                 break;
             }
         }
+        // pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x | 0b101);
 
         println!("Writing BDL pos");
-        let address = (self.bar1 & 0xFFFFFFFC) + 0x10 + 0x0;
+        let address = self.bar1 + 0x10 + 0x0;
         let mut l = BUFFER_DESCRIPTOR_LIST.lock();
         let raw_addr: *mut [BufferDescriptor; 32] = &raw mut *l;
         debug_assert!(raw_addr as u64 <= u32::MAX as u64);
         let addr_truncated = raw_addr as u32;
+        println!("BDL^{:#X}", addr_truncated);
+        for i in 0..32 {
+            let h = (addr_truncated + i * 2) as *const u16;
+            print!("<{:04X}>", unsafe { *h });
+        }
         io_space_bar_write(address, addr_truncated);
 
         println!("Writing number of last valid buffer");
-        let address_last_valid_idx = (self.bar1 & 0xFFFFFFFC) + 0x10 + 0x05;
+        let address_last_valid_idx = self.bar1 + 0x10 + 0x05;
         io_space_bar_write::<u8>(address_last_valid_idx, 31);
 
         println!("Setting bit for transferring data");
         io_space_bar_write::<u8>(address_reset, 1);
+
+        loop {
+            let x = io_space_bar_read::<u16>(self.bar1 + 0x16) & 0x1;
+            if x == 1 {
+                println!("F done");
+                break;
+            } else {
+                let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
+                println!("F {x} {y}");
+            }
+        }
     }
 }
 
@@ -139,11 +173,16 @@ fn init_audio() -> Option<AudioAc97> {
                         println!("Warning, found multiple AC97 devices!");
                     }
 
+                    println!(
+                        "I {} {}",
+                        full_header.interrupt_pin, full_header.interrupt_line
+                    );
+
                     audio = Some(AudioAc97 {
                         bus,
                         slot: device,
-                        bar0: full_header.base_addresses[0],
-                        bar1: full_header.base_addresses[0],
+                        bar0: (full_header.base_addresses[0] & 0xFFFFFFFC) as u16,
+                        bar1: (full_header.base_addresses[1] & 0xFFFFFFFC) as u16,
                     });
                 }
             }
@@ -180,11 +219,16 @@ fn check_all() {
                     h.vendor_id, h.device_id, h.class_code, h.subclass, h.header_type
                 );
 
-                if h.header_type == 0 {
+                if h.header_type == 1 {
+                    println!("{h:#X?}");
+                    return;
+                }
+
+                if false && h.header_type == 0 {
                     let h = parse_header_type0(bus, device, 0, h);
 
                     if h.headhead.class_code == 0x4 {
-                        // println!("{h:#X?}");
+                        println!("{h:#X?}");
                         println!("{:#013b}", h.headhead.command);
 
                         // https://wiki.osdev.org/AC97#Detecting_AC97_sound_card
