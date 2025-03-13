@@ -1,4 +1,6 @@
-use headers::{half_u32, parse_header_common, parse_header_type0};
+use core::mem::transmute;
+
+use headers::{half_u32, parse_header_common, parse_header_type0, quarter_u32};
 use io::{
     io_space_bar_read, io_space_bar_write, pci_config_modify, pci_config_read_u32,
     pci_config_read_word, pci_config_write_u32,
@@ -30,7 +32,7 @@ lazy_static! {
     static ref SAMPLE: [i16; WAVSIZE * 2] = {
         let mut x = [0i16; WAVSIZE * 2];
         for i in 0..x.len() {
-            x[i] = ((i * 100) % (i16::MAX as usize)) as i16;
+            x[i] = (i as i16).wrapping_mul(79);
         }
         x
     };
@@ -38,7 +40,7 @@ lazy_static! {
 
 // #[repr(packed)]
 #[repr(align(4))]
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct BufferDescriptor {
     physical_addr: u32,
     num_samples: u16,
@@ -56,10 +58,17 @@ impl BufferDescriptor {
         debug_assert!(raw_addr as u64 <= u32::MAX as u64);
         let addr_truncated = raw_addr as u32;
 
+        debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
+        debug_assert!(
+            unsafe { *raw_addr }[27]
+                == unsafe { *transmute::<usize, *mut [i16; WAVSIZE * 2]>(addr_truncated as usize) }
+                    [27]
+        );
+
         BufferDescriptor {
             physical_addr: addr_truncated,
             num_samples: WAVSIZE as u16,
-            control: 0,
+            control: 1 << 15,
         }
     }
 }
@@ -81,18 +90,21 @@ struct AudioAc97 {
 
 impl AudioAc97 {
     fn play(&self) {
+        println!("{self:#X?}");
+
         pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x | 0b101);
         // pci_config_modify(self.bus, self.slot, 0, 0xF, |x| {
         //     x | 0b00000000_00000000_00000011_00000011
         // });
 
-        io_space_bar_write::<u32>(self.bar1 + 0x2C, 0x2);
+        io_space_bar_write::<u32>(self.bar1 + 0x2C, 0x3);
         io_space_bar_write::<u16>(self.bar0 + 0x00, 0xFFFF);
-        io_space_bar_write::<u16>(self.bar0 + 0x18, 0x0);
 
         // set volumes
-        io_space_bar_write::<u16>(self.bar0 + 0x02, 0x0);
-        io_space_bar_write::<u16>(self.bar0 + 0x04, 0x0);
+        io_space_bar_write::<u16>(self.bar0 + 0x18, 0x1); //PCM
+        io_space_bar_write::<u16>(self.bar0 + 0x02, 0x1); //Master
+
+        io_space_bar_write::<u16>(self.bar0 + 0x04, 0x1); //Aux output
 
         let samp_front = io_space_bar_read::<u16>(self.bar0 + 0x2C);
         let samp_surr = io_space_bar_read::<u16>(self.bar0 + 0x2E);
@@ -100,28 +112,33 @@ impl AudioAc97 {
         let samp_lr = io_space_bar_read::<u16>(self.bar0 + 0x32);
         println!("samp {samp_front} {samp_surr} {samp_lfe} {samp_lr}");
 
-        let x = io_space_bar_read::<u16>(self.bar0 + 0x18);
-        println!("pcm {x:#X}");
+        {
+            let (pcm, master, aux) = (
+                io_space_bar_read::<u16>(self.bar0 + 0x18), //PCM
+                io_space_bar_read::<u16>(self.bar0 + 0x02), //Master
+                io_space_bar_read::<u16>(self.bar0 + 0x04), //Aux output
+            );
 
-        // pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x | 0b101);
-        println!("{self:#X?}");
-        // TODO(colin): figure out what is happening here
-        // I am going off of the bottom of this page
-        // https://wiki.osdev.org/AC97
-        // but I can't seem to write anything properly,
-        // when I read back b I just get 255
+            println!("PCM,MASTER,AUX {pcm:#X} {master:#X} {aux:#X} {pcm:#b} {master:#b} {aux:#b}")
+        }
+        {
+            let glob = io_space_bar_read::<u32>(self.bar1 + 0x2C);
+            // note that this is just 0. Does that mean device is is reset?
+            println!("global control {glob:#b}");
+        }
+
         println!("Setting reset bit of audio...");
         let address_reset = self.bar1 + 0x1B;
         io_space_bar_write::<u8>(address_reset, 2);
         // pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x & !0b11);
-        let b = io_space_bar_read::<u8>(address_reset);
-        print!("[{b}");
+        // let b = io_space_bar_read::<u8>(address_reset);
+        // print!("[{b}");
 
         loop {
             let b = io_space_bar_read::<u8>(address_reset);
             println!("[{b}");
-            if io_space_bar_read::<u8>(address_reset) & 0b10 == 0 {
-                // println!("Bit was cleared!");
+            if io_space_bar_read::<u8>(address_reset) & 0x2 != 0x2 {
+                println!("Bit was cleared!");
                 break;
             }
         }
@@ -130,105 +147,128 @@ impl AudioAc97 {
         println!("Writing BDL pos");
         let address = self.bar1 + 0x10 + 0x0;
         let mut l = BUFFER_DESCRIPTOR_LIST.lock();
-        {
-            let j = l[1].physical_addr;
-            for i in 0..100 {
-                let b = (j + i * 2) as *const u16;
-                print!("[{:#X}]", unsafe { *b });
-            }
-        }
+        // {
+        //     let j = l[1].physical_addr;
+        //     for i in 0..100 {
+        //         let b = (j + i * 2) as *const u16;
+        //         print!("[{:#X}]", unsafe { *b });
+        //     }
+        // }
         let raw_addr: *mut [BufferDescriptor; 32] = &raw mut *l;
-        debug_assert!(raw_addr as u64 <= u32::MAX as u64);
+        debug_assert!(raw_addr as usize <= u32::MAX as usize);
         let addr_truncated = raw_addr as u32;
         println!("BDL^{:#X}", addr_truncated);
         for i in 0..64 {
             let h = (addr_truncated + i * 2) as *const u16;
-            // print!("<{:04X}>", unsafe { *h });
+            print!("<{:04X}>", unsafe { *h });
         }
 
-        // io_space_bar_write(address, addr_truncated);
+        debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
+        debug_assert!(
+            unsafe { *raw_addr }[3]
+                == unsafe {
+                    *transmute::<usize, *mut [BufferDescriptor; 32]>(addr_truncated as usize)
+                }[3]
+        );
+
+        io_space_bar_write(address, addr_truncated);
 
         println!("Writing number of last valid buffer");
         let address_last_valid_idx = self.bar1 + 0x10 + 0x05;
         io_space_bar_write::<u8>(address_last_valid_idx, 10);
 
-        let mut STACK_MAGIC = Volatile::new([0i16; 1028]);
-        for i in 0..STACK_MAGIC.read().len() {
-            STACK_MAGIC.update(|x| x[i] = (i * 40) as i16);
-        }
-
-        let mut x = &raw const STACK_MAGIC as u32;
-        while x % 4 != 0 {
-            x += 1
-        }
-        let mut BD = Volatile::new(BufferDescriptor {
-            physical_addr: x,
-            num_samples: 512,
-            control: 1 << 15,
-        });
-        let BDL: [Volatile<BufferDescriptor>; 32] = [
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-            BD.clone(),
-        ];
-
-        let BDA = &raw const BDL as u32;
-
-        let test = BDA;
-        io_space_bar_write::<u32>(address, test);
-
-        {
-            let p = &raw const test;
-            unsafe {
-                let a = *p;
-                let b = *((p as u32 + 4) as *const u16);
-                let c = *((p as u32 + 6) as *const u16);
-
-                println!("Descriptor: {a:#010X} {b:#06X} {c:#b}")
-            }
-        }
+        // let mut STACK_MAGIC = Volatile::new([0i16; 1028]);
+        // for i in 0..STACK_MAGIC.read().len() {
+        //     STACK_MAGIC.update(|x| x[i] = (i * 40) as i16);
+        // }
+        //
+        // let mut x = &raw const STACK_MAGIC as u32;
+        // while x % 4 != 0 {
+        //     x += 1;
+        //     println!("shifting frame start ptr!");
+        // }
+        // println!("STACK_MAGIC addr: {x:#X}");
+        // let mut BD = Volatile::new(BufferDescriptor {
+        //     physical_addr: x,
+        //     num_samples: 512,
+        //     control: 0,
+        // });
+        // let BDL: [Volatile<BufferDescriptor>; 32] = [
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        //     BD.clone(),
+        // ];
+        //
+        // let ptr = &raw const BDL;
+        // let BDA = ptr as usize;
+        // debug_assert!(BDA <= u32::MAX as usize);
+        // let BDA = BDA as u32;
+        // let ptr2: *const [Volatile<BufferDescriptor>; 32] = unsafe { transmute(BDA as usize) };
+        // debug_assert!(ptr == ptr2, "{ptr:?} != {ptr2:?}");
+        //
+        // println!("BDA: {BDA:#X}");
+        //
+        // io_space_bar_write::<u32>(address, BDA);
+        //
+        // {
+        //     let x: *const u32 = unsafe { transmute(BDA as usize) };
+        //     unsafe {
+        //         let a = *x;
+        //         // let b = *((p as usize + 4) as *const u16);
+        //         // let c = *((p as usize + 6) as *const u16);
+        //
+        //         // println!("Descriptor: {a:#010X} {b:#06X} {c:#b}")
+        //         println!("Descriptor: {a:#X}")
+        //     }
+        // }
 
         // IMPORTANT:
         // This is the line that gives Qemu a "volume meter" in pavucontrol
         // before this, there is no volume indicator, but after this there is!
         // unfortunately it does not move at all
         println!("Setting bit for transferring data");
-        io_space_bar_write::<u8>(address_reset, 1);
+        io_space_bar_write::<u8>(address_reset, 0b11101);
 
         let mut w = 0;
         loop {
             let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
             io_space_bar_write::<u8>(address_last_valid_idx, y.wrapping_sub(1) & 0b11111);
             let x = io_space_bar_read::<u16>(self.bar1 + 0x16);
+
+            // STACK_MAGIC.update(|xs| {
+            //     for x in xs.iter_mut() {
+            //         *x = x.wrapping_mul(7);
+            //     }
+            // });
 
             if x & 2 == 1 || x & 1 == 1 {
                 println!("F done {x:#b}");
@@ -240,9 +280,6 @@ impl AudioAc97 {
                 }
                 let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
                 let z = io_space_bar_read::<u16>(self.bar1 + 0x18);
-                let z1 = io_space_bar_read::<u16>(self.bar1 + 0x18);
-                let z2 = io_space_bar_read::<u16>(self.bar1 + 0x18);
-                let z3 = io_space_bar_read::<u16>(self.bar1 + 0x18);
 
                 let next = io_space_bar_read::<u8>(self.bar1 + 0x1A);
                 let control = io_space_bar_read::<u8>(self.bar1 + 0x1B);
@@ -277,9 +314,27 @@ fn init_audio() -> Option<AudioAc97> {
                     }
 
                     println!(
-                        "I {} {}",
-                        full_header.interrupt_pin, full_header.interrupt_line
+                        "I {} {} {:#018b} {:#018b}",
+                        full_header.interrupt_pin,
+                        full_header.interrupt_line,
+                        full_header.headhead.command,
+                        full_header.headhead.status
                     );
+
+                    pci_config_modify(bus, device, 0, 0xF, |x| {
+                        let tmp = x & !0xFF_FF;
+                        let tmp = tmp | 0x00_5C;
+
+                        println!("modifying {x:#b} to {tmp:#b}");
+
+                        tmp
+                    });
+
+                    {
+                        let (_, _, pin, line) =
+                            quarter_u32(pci_config_read_u32(bus, device, 0, 0xF));
+                        println!("I {} {}", pin, line,);
+                    }
 
                     audio = Some(AudioAc97 {
                         bus,

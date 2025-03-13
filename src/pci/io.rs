@@ -89,6 +89,7 @@ pub fn pci_config_modify(bus: u8, slot: u8, func: u8, register: u8, f: impl Fn(u
 
     tmp = f(tmp);
 
+    unsafe { config_address_port.write(address) };
     unsafe { config_data_port.write(tmp) }
 }
 
