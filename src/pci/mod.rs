@@ -6,6 +6,7 @@ use io::{
 use lazy_static::lazy_static;
 use pluggable_interrupt_os::{print, println};
 use spin::Mutex;
+use volatile::Volatile;
 use x86_64::instructions::port::Port;
 
 mod headers;
@@ -35,7 +36,8 @@ lazy_static! {
     };
 }
 
-#[repr(packed)]
+// #[repr(packed)]
+#[repr(align(4))]
 #[derive(Debug, Default, Clone, Copy)]
 struct BufferDescriptor {
     physical_addr: u32,
@@ -57,7 +59,7 @@ impl BufferDescriptor {
         BufferDescriptor {
             physical_addr: addr_truncated,
             num_samples: WAVSIZE as u16,
-            control: 1 << 15,
+            control: 0,
         }
     }
 }
@@ -84,13 +86,13 @@ impl AudioAc97 {
         //     x | 0b00000000_00000000_00000011_00000011
         // });
 
-        io_space_bar_write::<u16>(self.bar0 + 0x00, 0x0);
+        io_space_bar_write::<u32>(self.bar1 + 0x2C, 0x2);
+        io_space_bar_write::<u16>(self.bar0 + 0x00, 0xFFFF);
+        io_space_bar_write::<u16>(self.bar0 + 0x18, 0x0);
 
         // set volumes
         io_space_bar_write::<u16>(self.bar0 + 0x02, 0x0);
         io_space_bar_write::<u16>(self.bar0 + 0x04, 0x0);
-
-        io_space_bar_write::<u16>(self.bar0 + 0x18, 0x0);
 
         let samp_front = io_space_bar_read::<u16>(self.bar0 + 0x2C);
         let samp_surr = io_space_bar_read::<u16>(self.bar0 + 0x2E);
@@ -98,12 +100,6 @@ impl AudioAc97 {
         let samp_lr = io_space_bar_read::<u16>(self.bar0 + 0x32);
         println!("samp {samp_front} {samp_surr} {samp_lfe} {samp_lr}");
 
-        io_space_bar_write::<u16>(self.bar1 + 0x2C, 0b0111);
-        let mut v = 10;
-        for i in 0..1000000 {
-            v -= 1;
-            print!("");
-        }
         let x = io_space_bar_read::<u16>(self.bar0 + 0x18);
         println!("pcm {x:#X}");
 
@@ -149,30 +145,109 @@ impl AudioAc97 {
             let h = (addr_truncated + i * 2) as *const u16;
             // print!("<{:04X}>", unsafe { *h });
         }
-        io_space_bar_write(address, addr_truncated);
+
+        // io_space_bar_write(address, addr_truncated);
 
         println!("Writing number of last valid buffer");
         let address_last_valid_idx = self.bar1 + 0x10 + 0x05;
-        io_space_bar_write::<u8>(address_last_valid_idx, 22);
+        io_space_bar_write::<u8>(address_last_valid_idx, 10);
 
+        let mut STACK_MAGIC = Volatile::new([0i16; 1028]);
+        for i in 0..STACK_MAGIC.read().len() {
+            STACK_MAGIC.update(|x| x[i] = (i * 40) as i16);
+        }
+
+        let mut x = &raw const STACK_MAGIC as u32;
+        while x % 4 != 0 {
+            x += 1
+        }
+        let mut BD = Volatile::new(BufferDescriptor {
+            physical_addr: x,
+            num_samples: 512,
+            control: 1 << 15,
+        });
+        let BDL: [Volatile<BufferDescriptor>; 32] = [
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+            BD.clone(),
+        ];
+
+        let BDA = &raw const BDL as u32;
+
+        let test = BDA;
+        io_space_bar_write::<u32>(address, test);
+
+        {
+            let p = &raw const test;
+            unsafe {
+                let a = *p;
+                let b = *((p as u32 + 4) as *const u16);
+                let c = *((p as u32 + 6) as *const u16);
+
+                println!("Descriptor: {a:#010X} {b:#06X} {c:#b}")
+            }
+        }
+
+        // IMPORTANT:
+        // This is the line that gives Qemu a "volume meter" in pavucontrol
+        // before this, there is no volume indicator, but after this there is!
+        // unfortunately it does not move at all
         println!("Setting bit for transferring data");
         io_space_bar_write::<u8>(address_reset, 1);
 
         let mut w = 0;
         loop {
-            io_space_bar_write::<u8>(address_last_valid_idx, 25);
+            let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
+            io_space_bar_write::<u8>(address_last_valid_idx, y.wrapping_sub(1) & 0b11111);
             let x = io_space_bar_read::<u16>(self.bar1 + 0x16);
+
             if x & 2 == 1 || x & 1 == 1 {
                 println!("F done {x:#b}");
                 break;
             } else {
                 w += 1;
-                if w > 20 {
+                if w > 0 {
                     // break;
                 }
                 let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
                 let z = io_space_bar_read::<u16>(self.bar1 + 0x18);
-                println!("F {x:#b} {y} ({z}/{})", SAMPLE.len() / 2);
+                let z1 = io_space_bar_read::<u16>(self.bar1 + 0x18);
+                let z2 = io_space_bar_read::<u16>(self.bar1 + 0x18);
+                let z3 = io_space_bar_read::<u16>(self.bar1 + 0x18);
+
+                let next = io_space_bar_read::<u8>(self.bar1 + 0x1A);
+                let control = io_space_bar_read::<u8>(self.bar1 + 0x1B);
+
+                println!("F {x:#b} {y} ({z:#06X}/) {next} {control:#010b}");
             }
         }
     }
