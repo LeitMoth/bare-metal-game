@@ -29,12 +29,12 @@ pub fn init_pci() {
 const WAVSIZE: usize = 0x1000;
 
 lazy_static! {
-    static ref SAMPLE: [i16; WAVSIZE * 2] = {
+    static ref SAMPLE: [Volatile<i16>; WAVSIZE * 2] = {
         let mut x = [0i16; WAVSIZE * 2];
         for i in 0..x.len() {
             x[i] = (i as i16).wrapping_mul(79);
         }
-        x
+        x.map(Volatile::new)
     };
 }
 
@@ -53,17 +53,12 @@ struct BufferDescriptor {
 
 impl BufferDescriptor {
     fn square() -> Self {
-        let raw_addr: *const [i16; WAVSIZE * 2] = &raw const *SAMPLE;
+        let raw_addr: *const [Volatile<i16>; WAVSIZE * 2] = &raw const *SAMPLE;
 
         debug_assert!(raw_addr as u64 <= u32::MAX as u64);
         let addr_truncated = raw_addr as u32;
 
         debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
-        debug_assert!(
-            unsafe { *raw_addr }[27]
-                == unsafe { *transmute::<usize, *mut [i16; WAVSIZE * 2]>(addr_truncated as usize) }
-                    [27]
-        );
 
         BufferDescriptor {
             physical_addr: addr_truncated,
@@ -74,8 +69,8 @@ impl BufferDescriptor {
 }
 
 lazy_static! {
-    static ref BUFFER_DESCRIPTOR_LIST: Mutex<[BufferDescriptor; 32]> =
-        Mutex::new([BufferDescriptor::square(); 32]);
+    static ref BUFFER_DESCRIPTOR_LIST: Mutex<[Volatile<BufferDescriptor>; 32]> =
+        Mutex::new([BufferDescriptor::square(); 32].map(Volatile::new));
 }
 
 #[derive(Debug)]
@@ -98,13 +93,16 @@ impl AudioAc97 {
         // });
 
         io_space_bar_write::<u32>(self.bar1 + 0x2C, 0x3);
-        io_space_bar_write::<u16>(self.bar0 + 0x00, 0xFFFF);
 
-        // set volumes
-        io_space_bar_write::<u16>(self.bar0 + 0x18, 0x1); //PCM
-        io_space_bar_write::<u16>(self.bar0 + 0x02, 0x1); //Master
+        for i in 0..100_000 {
+            print!("");
+        }
 
-        io_space_bar_write::<u16>(self.bar0 + 0x04, 0x1); //Aux output
+        io_space_bar_write::<u16>(self.bar0 + 0x00, 0xFF);
+
+        for i in 0..100_000 {
+            print!("");
+        }
 
         let samp_front = io_space_bar_read::<u16>(self.bar0 + 0x2C);
         let samp_surr = io_space_bar_read::<u16>(self.bar0 + 0x2E);
@@ -133,6 +131,9 @@ impl AudioAc97 {
         // pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x & !0b11);
         // let b = io_space_bar_read::<u8>(address_reset);
         // print!("[{b}");
+        for i in 0..100_000 {
+            print!("");
+        }
 
         loop {
             let b = io_space_bar_read::<u8>(address_reset);
@@ -144,6 +145,17 @@ impl AudioAc97 {
         }
         // pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x | 0b101);
 
+        // set volumes
+        io_space_bar_write::<u16>(self.bar0 + 0x18, 0x0); //PCM
+        io_space_bar_write::<u16>(self.bar0 + 0x02, 0x0); //Master
+
+        io_space_bar_write::<u16>(self.bar0 + 0x04, 0x2020); //Aux output
+        for i in 0..100_000 {
+            print!("");
+        }
+
+        io_space_bar_write::<u8>(address_reset, 0x0);
+
         println!("Writing BDL pos");
         let address = self.bar1 + 0x10 + 0x0;
         let mut l = BUFFER_DESCRIPTOR_LIST.lock();
@@ -154,7 +166,7 @@ impl AudioAc97 {
         //         print!("[{:#X}]", unsafe { *b });
         //     }
         // }
-        let raw_addr: *mut [BufferDescriptor; 32] = &raw mut *l;
+        let raw_addr: *mut [Volatile<BufferDescriptor>; 32] = &raw mut *l;
         debug_assert!(raw_addr as usize <= u32::MAX as usize);
         let addr_truncated = raw_addr as u32;
         println!("BDL^{:#X}", addr_truncated);
@@ -164,12 +176,6 @@ impl AudioAc97 {
         }
 
         debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
-        debug_assert!(
-            unsafe { *raw_addr }[3]
-                == unsafe {
-                    *transmute::<usize, *mut [BufferDescriptor; 32]>(addr_truncated as usize)
-                }[3]
-        );
 
         io_space_bar_write(address, addr_truncated);
 
@@ -177,98 +183,20 @@ impl AudioAc97 {
         let address_last_valid_idx = self.bar1 + 0x10 + 0x05;
         io_space_bar_write::<u8>(address_last_valid_idx, 10);
 
-        // let mut STACK_MAGIC = Volatile::new([0i16; 1028]);
-        // for i in 0..STACK_MAGIC.read().len() {
-        //     STACK_MAGIC.update(|x| x[i] = (i * 40) as i16);
-        // }
-        //
-        // let mut x = &raw const STACK_MAGIC as u32;
-        // while x % 4 != 0 {
-        //     x += 1;
-        //     println!("shifting frame start ptr!");
-        // }
-        // println!("STACK_MAGIC addr: {x:#X}");
-        // let mut BD = Volatile::new(BufferDescriptor {
-        //     physical_addr: x,
-        //     num_samples: 512,
-        //     control: 0,
-        // });
-        // let BDL: [Volatile<BufferDescriptor>; 32] = [
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        //     BD.clone(),
-        // ];
-        //
-        // let ptr = &raw const BDL;
-        // let BDA = ptr as usize;
-        // debug_assert!(BDA <= u32::MAX as usize);
-        // let BDA = BDA as u32;
-        // let ptr2: *const [Volatile<BufferDescriptor>; 32] = unsafe { transmute(BDA as usize) };
-        // debug_assert!(ptr == ptr2, "{ptr:?} != {ptr2:?}");
-        //
-        // println!("BDA: {BDA:#X}");
-        //
-        // io_space_bar_write::<u32>(address, BDA);
-        //
-        // {
-        //     let x: *const u32 = unsafe { transmute(BDA as usize) };
-        //     unsafe {
-        //         let a = *x;
-        //         // let b = *((p as usize + 4) as *const u16);
-        //         // let c = *((p as usize + 6) as *const u16);
-        //
-        //         // println!("Descriptor: {a:#010X} {b:#06X} {c:#b}")
-        //         println!("Descriptor: {a:#X}")
-        //     }
-        // }
+        io_space_bar_write::<u16>(self.bar1 + 0x16, 0x1C);
 
         // IMPORTANT:
         // This is the line that gives Qemu a "volume meter" in pavucontrol
         // before this, there is no volume indicator, but after this there is!
         // unfortunately it does not move at all
         println!("Setting bit for transferring data");
-        io_space_bar_write::<u8>(address_reset, 0b11101);
+        io_space_bar_write::<u8>(address_reset, 0b1);
 
         let mut w = 0;
         loop {
             let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
             io_space_bar_write::<u8>(address_last_valid_idx, y.wrapping_sub(1) & 0b11111);
             let x = io_space_bar_read::<u16>(self.bar1 + 0x16);
-
-            // STACK_MAGIC.update(|xs| {
-            //     for x in xs.iter_mut() {
-            //         *x = x.wrapping_mul(7);
-            //     }
-            // });
 
             if x & 2 == 1 || x & 1 == 1 {
                 println!("F done {x:#b}");
