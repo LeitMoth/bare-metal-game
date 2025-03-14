@@ -1,19 +1,13 @@
-use core::{
-    mem::transmute,
-    ptr::{copy_nonoverlapping, slice_from_raw_parts},
-};
+use core::{mem::transmute, ptr::slice_from_raw_parts};
 
-use bootloader::BootInfo;
-use headers::{half_u16, half_u32, parse_header_common, parse_header_type0, quarter_u32};
+use headers::{half_u32, parse_header_common, parse_header_type0, quarter_u32};
 use io::{
     io_space_bar_read, io_space_bar_write, pci_config_modify, pci_config_read_u32,
-    pci_config_read_word, pci_config_write_u32,
+    pci_config_read_word,
 };
 use lazy_static::lazy_static;
 use pluggable_interrupt_os::{print, println};
-use spin::Mutex;
 use volatile::Volatile;
-use x86_64::instructions::port::Port;
 
 use crate::PhysAllocator;
 
@@ -22,26 +16,6 @@ mod io;
 
 static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/something_like_megaman2.raw");
 // static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/snippet.raw");
-
-/*
-> 0x23AB88 - 0x1BB88
-  2337672 − 113544 = 2224128
-> base 16
-  2224128 = 0x0021F000
-
-> base 16
-> 0x239e88 - 0x1be88
-2334344 − 114312 = 0x0021E000
-*/
-
-/*
-> 0x23A388 - 0x1b388 = 0x0021F000
-
-> 0x23bc88 - 0x1bc88 = 0x00220000
->
-*/
-// const MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR: u64 = 0x0021F000;
-const MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR: u64 = 0x0021E000;
 
 /*
 Everything here makes extensive reference of: https://wiki.osdev.org/PCI
@@ -105,34 +79,6 @@ pub fn init_pci(phys_alloc: &mut PhysAllocator) {
 
     // check_all();
     let a = init_audio(phys_alloc).unwrap();
-    // a.play();
-
-    // const WAV_SAMPLES: usize = 0x1000;
-    // type Frame = [Volatile<i16>; WAV_SAMPLES * 2];
-    // let samples = phys_alloc.alloc32::<Frame>();
-    //
-    // for i in 0..WAV_SAMPLES {
-    //     fn saw(i: usize) -> i16 {
-    //         const U: i32 = i16::MAX as i32;
-    //         const F: i32 = 100;
-    //         let tmp = ((i as i32) * 3 * F) % (U * 2) - U;
-    //         tmp as i16
-    //     }
-    //     // let val = (i as i16).wrapping_mul(79);
-    //     let val = saw(i);
-    //     samples.rw_virt[2 * i] = Volatile::new(val);
-    //     samples.rw_virt[2 * i + 1] = Volatile::new(val);
-    // }
-    //
-    // let bd = BufferDescriptor {
-    //     physical_addr: samples.r_phys,
-    //     num_samples: WAV_SAMPLES as u16,
-    //     control: 0,
-    // };
-    // for i in 0..32 {
-    //     bdl.rw_virt[i] = Volatile::new(bd.clone());
-    // }
-    //
     println!("FREE: {}", phys_alloc.kb_free());
 
     a.play(bdl.r_phys);
@@ -163,34 +109,6 @@ struct BufferDescriptor {
     control: u16,
 }
 
-// impl BufferDescriptor {
-//     fn square() -> Self {
-//         let raw_addr: *const [Volatile<i16>; WAVSIZE * 2] = &raw const *SAMPLE;
-//
-//         let phys_raw_addr = raw_addr as u32 - MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR as u32;
-//
-//         // debug_assert!(raw_addr as u64 <= u32::MAX as u64);
-//         // let addr_truncated = raw_addr as u32;
-//         //
-//         // debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
-//
-//         BufferDescriptor {
-//             physical_addr: phys_raw_addr,
-//             num_samples: WAVSIZE as u16,
-//             control: 0,
-//         }
-//     }
-// }
-//
-// lazy_static! {
-//     static ref BUFFER_DESCRIPTOR_LIST: Mutex<[Volatile<BufferDescriptor>; 32]> =
-//         Mutex::new([BufferDescriptor::square(); 32].map(Volatile::new));
-// }
-//
-// fn setup_stuff() {
-//     copy_nonoverlapping(src, dst, count);
-// }
-
 #[derive(Debug)]
 struct AudioAc97 {
     bus: u8,
@@ -217,40 +135,6 @@ impl AudioAc97 {
         }
 
         io_space_bar_write::<u16>(self.bar0 + 0x00, 0xFF);
-
-        for i in 0..100_000 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
-        for i in 0..10 {
-            print!("");
-        }
 
         let samp_front = io_space_bar_read::<u16>(self.bar0 + 0x2C);
         let samp_surr = io_space_bar_read::<u16>(self.bar0 + 0x2E);
@@ -304,31 +188,6 @@ impl AudioAc97 {
 
         io_space_bar_write::<u8>(address_reset, 0x0);
 
-        // println!("Writing BDL pos");
-        // let address = self.bar1 + 0x10 + 0x0;
-        // let mut l = BUFFER_DESCRIPTOR_LIST.lock();
-        // // {
-        // //     let j = l[1].physical_addr;
-        // //     for i in 0..100 {
-        // //         let b = (j + i * 2) as *const u16;
-        // //         print!("[{:#X}]", unsafe { *b });
-        // //     }
-        // // }
-        // let raw_addr: *mut [Volatile<BufferDescriptor>; 32] = &raw mut *l;
-        // println!("RAW      {:#018X}", raw_addr as u64);
-        // println!("RAW PHYS {:#018X}", raw_addr as u64 + self.phys_mem_offset);
-        // let raw_phys_addr = raw_addr as u64 - MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR;
-        // debug_assert!(raw_phys_addr as usize <= u32::MAX as usize);
-        // let addr_truncated = raw_phys_addr as u32;
-        // println!("BDL^{:#X}", addr_truncated);
-        // // for i in 0..64 {
-        // //     let h = (addr_truncated + i * 2) as *const u16;
-        // //     print!("<{:04X}>", unsafe { *h });
-        // // }
-        // // debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
-        //
-        // io_space_bar_write(address, addr_truncated);
-
         io_space_bar_write(self.bar1 + 0x10, bdl_phys_loc);
 
         println!("Writing number of last valid buffer");
@@ -337,12 +196,9 @@ impl AudioAc97 {
 
         io_space_bar_write::<u16>(self.bar1 + 0x16, 0x1C);
 
-        // loop {}
-
         // IMPORTANT:
         // This is the line that gives Qemu a "volume meter" in pavucontrol
         // before this, there is no volume indicator, but after this there is!
-        // unfortunately it does not move at all
         println!("Setting bit for transferring data");
         io_space_bar_write::<u8>(address_reset, 0b1);
 
