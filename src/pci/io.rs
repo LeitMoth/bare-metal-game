@@ -1,4 +1,3 @@
-use pluggable_interrupt_os::println;
 use x86_64::{
     instructions::port::Port,
     structures::port::{PortRead, PortWrite},
@@ -101,8 +100,8 @@ pub fn pci_config_modify(bus: u8, slot: u8, func: u8, register: u8, f: impl Fn(u
 // can reside at any memory address (even beyond physical memory)."
 // Which gives the impression that I/O space bars can be a lot larger than 16 bits.
 // But when I caved in and look at how the referenced code stored these,
-// it stores bars as word_t s!!!!!
-// So I guess it is u16
+// it stores bars as 'word_t's!!!!!
+// So I guess there are just 16 bit an the wiki was misleading.
 pub fn io_space_bar_write<T: PortWrite>(port: u16, value: T) {
     // println!("W_{port:#X}");
     let mut config_address_port = Port::new(port);
