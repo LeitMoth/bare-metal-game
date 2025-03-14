@@ -1,6 +1,6 @@
 use core::{mem::transmute, ptr::slice_from_raw_parts};
 
-use headers::{half_u32, parse_header_common, parse_header_type0, quarter_u32};
+use headers::{parse_header_common, parse_header_type0, quarter_u32};
 use io::{
     io_space_bar_read, io_space_bar_write, pci_config_modify, pci_config_read_u32,
     pci_config_read_word,
