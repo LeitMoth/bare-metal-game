@@ -48,14 +48,35 @@ pub fn init_pci(phys_alloc: &mut PhysAllocator) {
     let a = init_audio(phys_alloc).unwrap();
     // a.play();
 
+    println!("FREE: {}", phys_alloc.kb_free());
+
+    phys_alloc.alloc32::<u64>();
+
+    println!("FREE: {}", phys_alloc.kb_free());
+
     const WAV_SAMPLES: usize = 0x1000;
     type Frame = [Volatile<i16>; WAV_SAMPLES * 2];
     let samples = phys_alloc.alloc32::<Frame>();
     for i in 0..WAV_SAMPLES {
-        let val = (i as i16).wrapping_mul(79);
+        // let val = if i * 40000 < WAV_SAMPLES / 2 {
+        //     i16::MIN
+        // } else {
+        //     i16::MAX
+        // };
+
+        fn saw(i: usize) -> i16 {
+            const U: i32 = i16::MAX as i32;
+            const F: i32 = 100;
+            let tmp = ((i as i32) * 3 * F) % (U * 2) - U;
+            tmp as i16
+        }
+        // let val = (i as i16).wrapping_mul(79);
+        let val = saw(i);
         samples.rw_virt[2 * i] = Volatile::new(val);
         samples.rw_virt[2 * i + 1] = Volatile::new(val);
     }
+
+    println!("FREE: {}", phys_alloc.kb_free());
 
     type BDL = [Volatile<BufferDescriptor>; 32];
     let bdl = phys_alloc.alloc32::<BDL>();
@@ -68,6 +89,8 @@ pub fn init_pci(phys_alloc: &mut PhysAllocator) {
     for i in 0..32 {
         bdl.rw_virt[i] = Volatile::new(bd.clone());
     }
+
+    println!("FREE: {}", phys_alloc.kb_free());
 
     a.play(bdl.r_phys);
 }
@@ -97,37 +120,36 @@ struct BufferDescriptor {
     control: u16,
 }
 
-impl BufferDescriptor {
-    fn square() -> Self {
-        let raw_addr: *const [Volatile<i16>; WAVSIZE * 2] = &raw const *SAMPLE;
-
-        let phys_raw_addr = raw_addr as u32 - MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR as u32;
-
-        // debug_assert!(raw_addr as u64 <= u32::MAX as u64);
-        // let addr_truncated = raw_addr as u32;
-        //
-        // debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
-
-        BufferDescriptor {
-            physical_addr: phys_raw_addr,
-            num_samples: WAVSIZE as u16,
-            control: 0,
-        }
-    }
-}
-
-lazy_static! {
-    static ref BUFFER_DESCRIPTOR_LIST: Mutex<[Volatile<BufferDescriptor>; 32]> =
-        Mutex::new([BufferDescriptor::square(); 32].map(Volatile::new));
-}
-
-fn setup_stuff() {
-    copy_nonoverlapping(src, dst, count);
-}
+// impl BufferDescriptor {
+//     fn square() -> Self {
+//         let raw_addr: *const [Volatile<i16>; WAVSIZE * 2] = &raw const *SAMPLE;
+//
+//         let phys_raw_addr = raw_addr as u32 - MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR as u32;
+//
+//         // debug_assert!(raw_addr as u64 <= u32::MAX as u64);
+//         // let addr_truncated = raw_addr as u32;
+//         //
+//         // debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
+//
+//         BufferDescriptor {
+//             physical_addr: phys_raw_addr,
+//             num_samples: WAVSIZE as u16,
+//             control: 0,
+//         }
+//     }
+// }
+//
+// lazy_static! {
+//     static ref BUFFER_DESCRIPTOR_LIST: Mutex<[Volatile<BufferDescriptor>; 32]> =
+//         Mutex::new([BufferDescriptor::square(); 32].map(Volatile::new));
+// }
+//
+// fn setup_stuff() {
+//     copy_nonoverlapping(src, dst, count);
+// }
 
 #[derive(Debug)]
 struct AudioAc97 {
-    phys_mem_offset: u64,
     bus: u8,
     slot: u8,
     // reset, device selection, volume control
@@ -137,7 +159,7 @@ struct AudioAc97 {
 }
 
 impl AudioAc97 {
-    fn play(&self) {
+    fn play(&self, bdl_phys_loc: u32) {
         println!("{self:#X?}");
 
         pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x | 0b101);
@@ -230,7 +252,7 @@ impl AudioAc97 {
 
         // set volumes
         io_space_bar_write::<u16>(self.bar0 + 0x18, 0x0); //PCM
-        io_space_bar_write::<u16>(self.bar0 + 0x02, 0x0); //Master
+        io_space_bar_write::<u16>(self.bar0 + 0x02, 0x2020); //Master
 
         io_space_bar_write::<u16>(self.bar0 + 0x04, 0x2020); //Aux output
         for i in 0..100_000 {
@@ -239,30 +261,32 @@ impl AudioAc97 {
 
         io_space_bar_write::<u8>(address_reset, 0x0);
 
-        println!("Writing BDL pos");
-        let address = self.bar1 + 0x10 + 0x0;
-        let mut l = BUFFER_DESCRIPTOR_LIST.lock();
-        // {
-        //     let j = l[1].physical_addr;
-        //     for i in 0..100 {
-        //         let b = (j + i * 2) as *const u16;
-        //         print!("[{:#X}]", unsafe { *b });
-        //     }
-        // }
-        let raw_addr: *mut [Volatile<BufferDescriptor>; 32] = &raw mut *l;
-        println!("RAW      {:#018X}", raw_addr as u64);
-        println!("RAW PHYS {:#018X}", raw_addr as u64 + self.phys_mem_offset);
-        let raw_phys_addr = raw_addr as u64 - MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR;
-        debug_assert!(raw_phys_addr as usize <= u32::MAX as usize);
-        let addr_truncated = raw_phys_addr as u32;
-        println!("BDL^{:#X}", addr_truncated);
-        // for i in 0..64 {
-        //     let h = (addr_truncated + i * 2) as *const u16;
-        //     print!("<{:04X}>", unsafe { *h });
-        // }
-        // debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
+        // println!("Writing BDL pos");
+        // let address = self.bar1 + 0x10 + 0x0;
+        // let mut l = BUFFER_DESCRIPTOR_LIST.lock();
+        // // {
+        // //     let j = l[1].physical_addr;
+        // //     for i in 0..100 {
+        // //         let b = (j + i * 2) as *const u16;
+        // //         print!("[{:#X}]", unsafe { *b });
+        // //     }
+        // // }
+        // let raw_addr: *mut [Volatile<BufferDescriptor>; 32] = &raw mut *l;
+        // println!("RAW      {:#018X}", raw_addr as u64);
+        // println!("RAW PHYS {:#018X}", raw_addr as u64 + self.phys_mem_offset);
+        // let raw_phys_addr = raw_addr as u64 - MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR;
+        // debug_assert!(raw_phys_addr as usize <= u32::MAX as usize);
+        // let addr_truncated = raw_phys_addr as u32;
+        // println!("BDL^{:#X}", addr_truncated);
+        // // for i in 0..64 {
+        // //     let h = (addr_truncated + i * 2) as *const u16;
+        // //     print!("<{:04X}>", unsafe { *h });
+        // // }
+        // // debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
+        //
+        // io_space_bar_write(address, addr_truncated);
 
-        io_space_bar_write(address, addr_truncated);
+        io_space_bar_write(self.bar1 + 0x10, bdl_phys_loc);
 
         println!("Writing number of last valid buffer");
         let address_last_valid_idx = self.bar1 + 0x10 + 0x05;
@@ -290,7 +314,7 @@ impl AudioAc97 {
                 break;
             } else {
                 w += 1;
-                if w > 4 {
+                if w > 20 {
                     break;
                 }
                 let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
@@ -353,7 +377,6 @@ fn init_audio(phys_alloc: &mut PhysAllocator) -> Option<AudioAc97> {
 
                     // let x = boot_info.physical_memory_offset;
                     audio = Some(AudioAc97 {
-                        phys_mem_offset: boot_info.physical_memory_offset,
                         bus,
                         slot: device,
                         bar0: (full_header.base_addresses[0] & 0xFFFFFFFC) as u16,

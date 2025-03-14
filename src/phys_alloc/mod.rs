@@ -6,7 +6,7 @@ use bootloader::{
 pub struct PhysAllocator {
     prime_region: MemoryRegion,
     physical_memory_offset: u64,
-    offset: u64,
+    next_free_addr: u64,
 }
 
 pub struct DualAddr {
@@ -39,17 +39,16 @@ impl PhysAllocator {
             Some(PhysAllocator {
                 prime_region: free_region,
                 physical_memory_offset: boot_info.physical_memory_offset,
-                offset: 0,
+                next_free_addr: free_region.range.start_addr(),
             })
         }
     }
 
     // Aligns by 4
     pub fn get_hunk(&mut self, size: u64) -> DualAddr {
-        let phys_mem_start = self.prime_region.range.start_addr();
         let phys_mem_end = self.prime_region.range.end_addr();
 
-        let mut phys_start = phys_mem_start + self.offset;
+        let mut phys_start = self.next_free_addr;
         // align to 4 byte boundary
         while phys_start % 4 != 0 {
             phys_start += 1;
@@ -63,7 +62,7 @@ impl PhysAllocator {
                 phys_end - phys_mem_end
             );
         } else {
-            self.offset = phys_end;
+            self.next_free_addr = phys_end;
             DualAddr {
                 phys_addr: phys_start,
                 virt_addr: phys_start + self.physical_memory_offset,
@@ -83,5 +82,22 @@ impl PhysAllocator {
             r_phys: phys_addr as u32,
             rw_virt: unsafe { &mut *(virt_addr as *mut T) },
         }
+    }
+
+    // MiB of free space
+    pub fn mb_free(&self) -> u64 {
+        self.kb_free() / 1024
+    }
+
+    // KiB of free space
+    pub fn kb_free(&self) -> u64 {
+        self.bytes_free() / 1024
+    }
+
+    // bytes of free space
+    pub fn bytes_free(&self) -> u64 {
+        let phys_mem_end = self.prime_region.range.end_addr();
+
+        phys_mem_end - self.next_free_addr
     }
 }
