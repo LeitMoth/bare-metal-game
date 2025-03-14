@@ -6,7 +6,9 @@ use music_data::WAV_DATA_SAMPLES;
 use pc_keyboard::DecodedKey;
 use pluggable_interrupt_os::{
     println,
-    vga_buffer::{clear_screen, plot, Color, ColorCode, BUFFER_HEIGHT, BUFFER_WIDTH},
+    vga_buffer::{
+        clear_screen, plot, plot_num_right_justified, Color, ColorCode, BUFFER_HEIGHT, BUFFER_WIDTH,
+    },
 };
 
 mod music_data;
@@ -88,6 +90,7 @@ pub struct Game<'a> {
     music_started: bool,
     state: GameState,
     random: u64,
+    high_score: u64,
 }
 
 enum GameState {
@@ -103,6 +106,7 @@ pub struct SpaceFox {
     world: World,
     xvel: f32,
     yvel: f32,
+    score: u64,
 }
 
 const PLAYER: usize = 1;
@@ -119,6 +123,7 @@ impl<'a> Game<'a> {
                 need_start: false,
             },
             random: 0xDEADBEEF,
+            high_score: 0,
         }
     }
 
@@ -167,7 +172,7 @@ impl<'a> Game<'a> {
                     println!("        Press any key to play!");
                     println!();
                     println!();
-                    println!();
+                    println!("    High Score: {}", self.high_score);
                     println!();
                     *first_draw = false;
                 }
@@ -184,6 +189,7 @@ impl<'a> Game<'a> {
                 if space_fox.update(r) {
                     space_fox.draw();
                 } else {
+                    self.high_score = self.high_score.max(space_fox.score);
                     self.state = GameState::GameOver {
                         first_draw: true,
                         timer: 50,
@@ -287,6 +293,7 @@ impl SpaceFox {
             world,
             xvel: 0.0,
             yvel: 0.0,
+            score: 0,
         }
     }
 
@@ -302,6 +309,8 @@ impl SpaceFox {
                 self.world[BLOCK].pos.z = 200.0;
                 let interp = ((rand as f32) / 255.0) * 6.0 - 3.0;
                 self.world[BLOCK].pos.x = interp;
+
+                self.score += 1;
             }
         }
 
@@ -434,6 +443,13 @@ impl SpaceFox {
         clear_lines(&self.lines[d], self.end[d]);
         plot_line(10, 24, 40, 10, '/');
         plot_line(70, 24, 40, 10, '\\');
+        plot_num_right_justified(
+            4,
+            self.score as isize,
+            BUFFER_WIDTH - 4 - 1,
+            1,
+            ColorCode::new(Color::Yellow, Color::Black),
+        );
         self.end[d] = 0;
         draw_lines(&self.lines[self.b], self.end[self.b]);
         self.swap_buffer();
