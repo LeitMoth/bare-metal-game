@@ -15,6 +15,9 @@ use x86_64::instructions::port::Port;
 mod headers;
 mod io;
 
+// const MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR: u64 = 0x0021F000;
+const MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR: u64 = 0x0021E000;
+
 /*
 Everything here makes extensive reference of: https://wiki.osdev.org/PCI
 And some: https://wiki.osdev.org/AC97
@@ -56,15 +59,17 @@ impl BufferDescriptor {
     fn square() -> Self {
         let raw_addr: *const [Volatile<i16>; WAVSIZE * 2] = &raw const *SAMPLE;
 
-        debug_assert!(raw_addr as u64 <= u32::MAX as u64);
-        let addr_truncated = raw_addr as u32;
+        let phys_raw_addr = raw_addr as u32 - MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR as u32;
 
-        debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
+        // debug_assert!(raw_addr as u64 <= u32::MAX as u64);
+        // let addr_truncated = raw_addr as u32;
+        //
+        // debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
 
         BufferDescriptor {
-            physical_addr: addr_truncated,
+            physical_addr: phys_raw_addr,
             num_samples: WAVSIZE as u16,
-            control: 1 << 15,
+            control: 0,
         }
     }
 }
@@ -94,7 +99,7 @@ impl AudioAc97 {
         //     x | 0b00000000_00000000_00000011_00000011
         // });
 
-        io_space_bar_write::<u32>(self.bar1 + 0x2C, 0x3);
+        io_space_bar_write::<u32>(self.bar1 + 0x2C, 0x2);
 
         for i in 0..100_000 {
             print!("");
@@ -171,16 +176,15 @@ impl AudioAc97 {
         let raw_addr: *mut [Volatile<BufferDescriptor>; 32] = &raw mut *l;
         println!("RAW      {:#018X}", raw_addr as u64);
         println!("RAW PHYS {:#018X}", raw_addr as u64 + self.phys_mem_offset);
-        let raw_phys_addr = raw_addr as u64 + self.phys_mem_offset;
+        let raw_phys_addr = raw_addr as u64 - MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR;
         debug_assert!(raw_phys_addr as usize <= u32::MAX as usize);
         let addr_truncated = raw_phys_addr as u32;
         println!("BDL^{:#X}", addr_truncated);
-        for i in 0..64 {
-            let h = (addr_truncated + i * 2) as *const u16;
-            print!("<{:04X}>", unsafe { *h });
-        }
-
-        debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
+        // for i in 0..64 {
+        //     let h = (addr_truncated + i * 2) as *const u16;
+        //     print!("<{:04X}>", unsafe { *h });
+        // }
+        // debug_assert!(raw_addr == unsafe { transmute(addr_truncated as usize) });
 
         io_space_bar_write(address, addr_truncated);
 
@@ -210,7 +214,7 @@ impl AudioAc97 {
                 break;
             } else {
                 w += 1;
-                if w > 10 {
+                if w > 4 {
                     break;
                 }
                 let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
