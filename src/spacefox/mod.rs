@@ -11,7 +11,7 @@ use pluggable_interrupt_os::{
 
 mod music_data;
 
-type Line = [i8; 4];
+type Line = [i8; 6];
 type LineBank = [Line; 100];
 
 const fn v(value: [f32; 3]) -> Vec3f {
@@ -29,6 +29,16 @@ struct Vec3f {
     z: f32,
 }
 
+impl Vec3f {
+    const fn mirx(&self) -> Self {
+        Self {
+            x: -self.x,
+            y: self.y,
+            z: self.z,
+        }
+    }
+}
+
 type World = [Model; 30];
 
 #[derive(Default, Clone, Copy)]
@@ -44,7 +54,9 @@ const SHIPV3: Vec3f = v([0.000000, -0.492211, 0.303217]);
 const SHIPV4: Vec3f = v([0.000000, -0.036415, -1.398604]);
 const SHIPF1: Prim = Prim::Tri(SHIPV1, SHIPV2, SHIPV4);
 const SHIPF2: Prim = Prim::Tri(SHIPV3, SHIPV1, SHIPV4);
-const SHIP_TRIS: &[Prim] = &[SHIPF1, SHIPF2];
+const SHIPF3: Prim = Prim::Tri(SHIPV1.mirx(), SHIPV2.mirx(), SHIPV4.mirx());
+const SHIPF4: Prim = Prim::Tri(SHIPV3.mirx(), SHIPV1.mirx(), SHIPV4.mirx());
+const SHIP_TRIS: &[Prim] = &[SHIPF1, SHIPF2, SHIPF3, SHIPF4];
 
 #[derive(Default, Clone, Copy)]
 enum Prim {
@@ -127,23 +139,24 @@ impl<'a> SpaceFox<'a> {
                                 z: p.z + pos.z,
                             }
                         };
-                        let persp = |p: Vec3f| -> (f32, f32) {
+                        let persp = |p: Vec3f| -> (f32, f32, f32) {
                             (
                                 p.x * scale / p.z * ASPECT_X + XOFF,
                                 p.y * scale / p.z * ASPECT_Y + YOFF,
+                                p.z,
                             )
                         };
 
                         // print!("[{}]", p1.z + pos.z);
 
-                        let i = |p: &Vec3f| -> (i8, i8) {
-                            let (x, y) = persp(modl(p));
-                            (x as i8, y as i8)
+                        let i = |p: &Vec3f| -> (i8, i8, i8) {
+                            let (x, y, z) = persp(modl(p));
+                            (x as i8, y as i8, z as i8)
                         };
 
-                        let (x1, y1) = i(p1);
-                        let (x2, y2) = i(p2);
-                        let (x3, y3) = i(p3);
+                        let (x1, y1, z1) = i(p1);
+                        let (x2, y2, z2) = i(p2);
+                        let (x3, y3, z3) = i(p3);
 
                         if x1 < 0 || x1 > BUFFER_WIDTH as i8 {
                             continue;
@@ -157,9 +170,19 @@ impl<'a> SpaceFox<'a> {
 
                         // println!("({},{})({},{})({},{})", x1, y1, x2, y2, x3, y3);
 
-                        self.lines[self.b][next_line + 0] = [x1, y1, x2, y2];
-                        self.lines[self.b][next_line + 1] = [x2, y2, x3, y3];
-                        self.lines[self.b][next_line + 2] = [x3, y3, x1, y1];
+                        // fn crappy_ln(x: f32) -> f32 {
+                        //     // 1.0 - 1.0 / x + x / 8.0
+                        //     // 3.41333 - 3.41333 / x + 0.853333 * x
+                        //     x
+                        // }
+                        //
+                        // let z1 = crappy_ln(p1.z + pos.z) as i8;
+                        // let z2 = crappy_ln(p2.z + pos.z) as i8;
+                        // let z3 = crappy_ln(p3.z + pos.z) as i8;
+
+                        self.lines[self.b][next_line + 0] = [x1, y1, z1, x2, y2, z2];
+                        self.lines[self.b][next_line + 1] = [x2, y2, z2, x3, y3, z3];
+                        self.lines[self.b][next_line + 2] = [x3, y3, z3, x1, y1, z1];
 
                         next_line += 3;
                     }
@@ -198,6 +221,8 @@ impl<'a> SpaceFox<'a> {
             DecodedKey::Unicode('s') => self.world[0].pos.y -= 1.0,
             DecodedKey::Unicode('u') => self.world[0].scale += 0.1,
             DecodedKey::Unicode('p') => self.world[0].scale -= 0.1,
+            DecodedKey::Unicode('q') => self.world[0].pos.z += 1.0,
+            DecodedKey::Unicode('e') => self.world[0].pos.z -= 1.0,
             // DecodedKey::Unicode(_) => todo!(),
             _ => {}
         }
@@ -205,19 +230,20 @@ impl<'a> SpaceFox<'a> {
 }
 
 fn draw_lines(lb: &LineBank, linechar: char) {
-    let myplot = |x, y| {
+    let myplot = |x, y, c| {
         if x < 0 || y < 0 || x >= BUFFER_WIDTH as i32 || y >= BUFFER_HEIGHT as i32 {
             return;
         }
+        let c = if linechar == ' ' { ' ' } else { c };
         plot(
-            linechar,
+            c,
             x as usize,
             y as usize,
             ColorCode::new(Color::LightCyan, Color::Black),
         );
     };
     for l in lb {
-        if l != &[0, 0, 0, 0] {
+        if l != &[0, 0, 0, 0, 0, 0] {
             plot_line(l, myplot);
         }
     }
@@ -226,11 +252,11 @@ fn draw_lines(lb: &LineBank, linechar: char) {
 // Bresenham's line algorithm, adapted from:
 // https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
 
-pub fn plot_line([x1, y1, x2, y2]: &Line, mut plot: impl FnMut(i32, i32)) {
-    let mut x1 = *x1 as i32;
-    let mut y1 = *y1 as i32;
-    let x2 = *x2 as i32;
-    let y2 = *y2 as i32;
+pub fn plot_line(&[x1, y1, z1, x2, y2, z2]: &Line, mut plot: impl FnMut(i32, i32, char)) {
+    let mut x1 = x1 as i32;
+    let mut y1 = y1 as i32;
+    let x2 = x2 as i32;
+    let y2 = y2 as i32;
 
     let dx = i32::abs(x2 - x1);
     let dy = -i32::abs(y2 - y1);
@@ -238,10 +264,17 @@ pub fn plot_line([x1, y1, x2, y2]: &Line, mut plot: impl FnMut(i32, i32)) {
     let sy = if y1 < y2 { 1 } else { -1 };
     let mut error = dx + dy;
 
-    let fuel = 40;
+    loop {
+        let percentage = i32::abs(x2 - x1) as f32 / (dx as f32 + 1.0);
+        let depth = (z1 as f32 * percentage) + (z2 as f32 * (1.0 - percentage));
+        let i = (depth) / 30.0;
+        let i = (i * GRAD.len() as f32)
+            .max(0.0)
+            .min(GRAD.len() as f32 - 1.0);
 
-    for _ in 0..fuel {
-        plot(x1, y1);
+        // const GRAD: &[char] = &['.', ':', '*', '#', '$', '@'];
+        const GRAD: &[char] = &['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+        plot(x1, y1, GRAD[i as usize]);
         if x1 == x2 && y1 == y2 {
             break;
         }
