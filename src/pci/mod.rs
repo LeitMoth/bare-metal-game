@@ -12,9 +12,28 @@ use spin::Mutex;
 use volatile::Volatile;
 use x86_64::instructions::port::Port;
 
+use crate::PhysAllocator;
+
 mod headers;
 mod io;
 
+/*
+> 0x23AB88 - 0x1BB88
+  2337672 − 113544 = 2224128
+> base 16
+  2224128 = 0x0021F000
+
+> base 16
+> 0x239e88 - 0x1be88
+2334344 − 114312 = 0x0021E000
+*/
+
+/*
+> 0x23A388 - 0x1b388 = 0x0021F000
+
+> 0x23bc88 - 0x1bc88 = 0x00220000
+>
+*/
 // const MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR: u64 = 0x0021F000;
 const MAGICAL_SUBRACT_ME_FOR_PHYS_ADDR: u64 = 0x0021E000;
 
@@ -24,9 +43,9 @@ And some: https://wiki.osdev.org/AC97
 As well as other linked references
 */
 
-pub fn init_pci(boot_info: &'static BootInfo) {
+pub fn init_pci(phys_alloc: &mut PhysAllocator) {
     // check_all();
-    let a = init_audio(boot_info).unwrap();
+    let a = init_audio(phys_alloc).unwrap();
     a.play();
 }
 
@@ -79,6 +98,10 @@ lazy_static! {
         Mutex::new([BufferDescriptor::square(); 32].map(Volatile::new));
 }
 
+fn setup_stuff() {
+    copy_nonoverlapping(src, dst, count);
+}
+
 #[derive(Debug)]
 struct AudioAc97 {
     phys_mem_offset: u64,
@@ -108,6 +131,36 @@ impl AudioAc97 {
         io_space_bar_write::<u16>(self.bar0 + 0x00, 0xFF);
 
         for i in 0..100_000 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
+            print!("");
+        }
+        for i in 0..10 {
             print!("");
         }
 
@@ -229,7 +282,7 @@ impl AudioAc97 {
     }
 }
 
-fn init_audio(boot_info: &'static BootInfo) -> Option<AudioAc97> {
+fn init_audio(phys_alloc: &mut PhysAllocator) -> Option<AudioAc97> {
     let mut audio = None;
 
     for bus in 0..=255 {
