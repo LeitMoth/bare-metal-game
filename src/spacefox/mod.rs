@@ -5,7 +5,7 @@ use crate::{
 use music_data::WAV_DATA_SAMPLES;
 use pc_keyboard::DecodedKey;
 use pluggable_interrupt_os::{
-    print, println,
+    println,
     vga_buffer::{clear_screen, plot, Color, ColorCode, BUFFER_HEIGHT, BUFFER_WIDTH},
 };
 
@@ -90,9 +90,9 @@ pub struct Game<'a> {
 }
 
 enum GameState {
-    Menu(bool),
+    Menu { first_draw: bool, need_start: bool },
     SpaceFox(SpaceFox),
-    GameOver(u16),
+    GameOver { first_draw: bool, timer: u16 },
 }
 
 pub struct SpaceFox {
@@ -113,7 +113,10 @@ impl<'a> Game<'a> {
         Self {
             music,
             music_started: false,
-            state: GameState::Menu(false),
+            state: GameState::Menu {
+                first_draw: true,
+                need_start: false,
+            },
         }
     }
 
@@ -122,11 +125,44 @@ impl<'a> Game<'a> {
             self.music.wind();
         }
         match self.state {
-            GameState::Menu(pressed_play) => {
-                clear_screen();
-                println!("SpaceFox x86_64");
-                println!("Press any key to play!");
-                if pressed_play {
+            GameState::Menu {
+                ref mut first_draw,
+                ref mut need_start,
+            } => {
+                if *first_draw {
+                    clear_screen();
+                    // "    _, ._,     ._, . , "
+                    // "\\./(_) (_      (_  |_| "
+                    // "/'\\(_) (_) ____(_)   | "
+                    println!(
+                        "        {}        {}",
+                        " __.            .___      ", "    _, ._,     ._, . , "
+                    );
+                    println!(
+                        "        {}        {}",
+                        "(__ ._  _. _. _ [__  _ \\./", "\\./(_) (_      (_  |_| "
+                    );
+                    println!(
+                        "        {}        {}",
+                        ".__)[_)(_](_.(/,|   (_)/'\\", "/'\\(_) (_) ____(_)   | "
+                    );
+                    println!("        {}        {}", "    |                     ", "");
+                    println!();
+                    println!();
+                    println!();
+                    println!("    SpaceFox x86_64");
+                    println!();
+                    println!("        Use WASD to move, and Space to brake");
+                    println!("        Watch out for the red obstacles");
+                    println!();
+                    println!("        Press any key to play!");
+                    println!();
+                    println!();
+                    println!();
+                    println!();
+                    *first_draw = false;
+                }
+                if *need_start {
                     clear_screen();
                     if !self.music_started {
                         self.music.play();
@@ -139,13 +175,43 @@ impl<'a> Game<'a> {
                 if space_fox.update() {
                     space_fox.draw();
                 } else {
-                    self.state = GameState::GameOver(50);
+                    self.state = GameState::GameOver {
+                        first_draw: true,
+                        timer: 100,
+                    };
                 }
             }
-            GameState::GameOver(ref mut ticks) => {
-                *ticks -= 1;
-                if *ticks == 0 {
-                    self.state = GameState::Menu(false);
+            GameState::GameOver {
+                ref mut first_draw,
+                ref mut timer,
+            } => {
+                if *first_draw {
+                    clear_screen();
+                    println!("           _______                      _______                  ");
+                    println!("          |   _   .---.-.--------.-----|   _   .--.--.-----.----.");
+                    println!("          |.  |___|  _  |        |  -__|.  |   |  |  |  -__|   _|");
+                    println!("          |.  |   |___._|__|__|__|_____|.  |   |\\___/|_____|__|  ");
+                    println!("          |:  1   |                    |:  1   |                 ");
+                    println!("          |::.. . |                    |::.. . |                 ");
+                    println!("          `-------'                    `-------'                 ");
+                    println!();
+                    println!();
+                    println!();
+                    println!("        Game Over! You hit a tower!");
+                    println!();
+                    println!();
+                    println!();
+                    println!();
+                    println!();
+                    println!();
+                    *first_draw = false;
+                }
+                *timer -= 1;
+                if *timer == 0 {
+                    self.state = GameState::Menu {
+                        first_draw: true,
+                        need_start: false,
+                    };
                 }
             }
         }
@@ -153,9 +219,11 @@ impl<'a> Game<'a> {
 
     pub fn key(&mut self, k: DecodedKey) {
         match self.state {
-            GameState::Menu(ref mut pressed_play) => *pressed_play = true,
+            GameState::Menu {
+                ref mut need_start, ..
+            } => *need_start = true,
             GameState::SpaceFox(ref mut space_fox) => space_fox.key(k),
-            GameState::GameOver(_) => {}
+            GameState::GameOver { .. } => {}
         }
     }
 }
@@ -188,19 +256,6 @@ impl SpaceFox {
 
     fn swap_buffer(&mut self) {
         self.b ^= 1
-    }
-
-    pub fn start_game(&mut self) {
-        // self.music.play();
-        let c = ColorCode::new(Color::Yellow, Color::LightGray);
-        for x in 0..BUFFER_WIDTH {
-            plot('@', x, 0, c);
-            plot('@', x, BUFFER_HEIGHT - 1, c);
-        }
-        for y in 0..BUFFER_HEIGHT {
-            plot('@', 0, y, c);
-            plot('@', BUFFER_WIDTH - 1, y, c);
-        }
     }
 
     pub fn update(&mut self) -> bool {
@@ -270,9 +325,6 @@ impl SpaceFox {
                         if next_line + 3 >= self.lines[0].len() {
                             break;
                         }
-                        // if [p1.z, p2.z, p3.z].iter().any(|z| *z <= 0.0) {
-                        //     continue;
-                        // }
 
                         let (x1, y1, z1) = i(p1);
                         let (x2, y2, z2) = i(p2);
@@ -288,18 +340,6 @@ impl SpaceFox {
                             continue;
                         }
 
-                        // println!("({},{})({},{})({},{})", x1, y1, x2, y2, x3, y3);
-
-                        // fn crappy_ln(x: f32) -> f32 {
-                        //     // 1.0 - 1.0 / x + x / 8.0
-                        //     // 3.41333 - 3.41333 / x + 0.853333 * x
-                        //     x
-                        // }
-                        //
-                        // let z1 = crappy_ln(p1.z + pos.z) as i8;
-                        // let z2 = crappy_ln(p2.z + pos.z) as i8;
-                        // let z3 = crappy_ln(p3.z + pos.z) as i8;
-
                         self.lines[self.b][next_line + 0] = [x1, y1, z1, x2, y2, z2, 0];
                         self.lines[self.b][next_line + 1] = [x2, y2, z2, x3, y3, z3, 0];
                         self.lines[self.b][next_line + 2] = [x3, y3, z3, x1, y1, z1, 0];
@@ -310,9 +350,6 @@ impl SpaceFox {
                         if next_line + 4 >= self.lines[0].len() {
                             break;
                         }
-                        // if [p1.z, p2.z, p3.z].iter().any(|z| *z <= 0.0) {
-                        //     continue;
-                        // }
 
                         let (x1, y1, z1) = i(p1);
                         let (x2, y2, z2) = i(p2);
@@ -332,18 +369,6 @@ impl SpaceFox {
                             continue;
                         }
 
-                        // println!("({},{})({},{})({},{})", x1, y1, x2, y2, x3, y3);
-
-                        // fn crappy_ln(x: f32) -> f32 {
-                        //     // 1.0 - 1.0 / x + x / 8.0
-                        //     // 3.41333 - 3.41333 / x + 0.853333 * x
-                        //     x
-                        // }
-                        //
-                        // let z1 = crappy_ln(p1.z + pos.z) as i8;
-                        // let z2 = crappy_ln(p2.z + pos.z) as i8;
-                        // let z3 = crappy_ln(p3.z + pos.z) as i8;
-
                         self.lines[self.b][next_line + 0] = [x1, y1, z1, x2, y2, z2, 1];
                         self.lines[self.b][next_line + 1] = [x2, y2, z2, x3, y3, z3, 1];
                         self.lines[self.b][next_line + 2] = [x3, y3, z3, x4, y4, z4, 1];
@@ -360,10 +385,10 @@ impl SpaceFox {
         let p1 = self.world[BLOCK].pos;
         let p2 = self.world[PLAYER].pos;
         let dx = p1.x - p2.x;
-        let dy = p1.y - p2.y;
+        // let dy = p1.y - p2.y;
         let dz = p1.z - p2.z;
 
-        dx * dx + dy * dy + dz * dz > 1.0
+        dx * dx + dz * dz > 1.0
     }
 
     pub fn draw(&mut self) {
@@ -385,16 +410,6 @@ impl SpaceFox {
                 self.xvel = 0.0;
                 self.yvel = 0.0;
             }
-            // DecodedKey::RawKey(key_code) => todo!(),
-            // DecodedKey::Unicode('a') => self.world[PLAYER].pos.x -= 1.0,
-            // DecodedKey::Unicode('d') => self.world[PLAYER].pos.x += 1.0,
-            // DecodedKey::Unicode('w') => self.world[PLAYER].pos.y += 1.0,
-            // DecodedKey::Unicode('s') => self.world[PLAYER].pos.y -= 1.0,
-            // DecodedKey::Unicode('u') => self.world[PLAYER].scale += 0.1,
-            // DecodedKey::Unicode('p') => self.world[PLAYER].scale -= 0.1,
-            // DecodedKey::Unicode('q') => self.world[PLAYER].pos.z += 1.0,
-            // DecodedKey::Unicode('e') => self.world[PLAYER].pos.z -= 1.0,
-            // DecodedKey::Unicode(_) => todo!(),
             _ => {}
         }
     }
