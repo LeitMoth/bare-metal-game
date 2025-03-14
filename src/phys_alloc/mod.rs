@@ -14,6 +14,11 @@ pub struct DualAddr {
     pub virt_addr: u64,
 }
 
+pub struct DualPtr32<'a, T> {
+    pub r_phys: u32,
+    pub rw_virt: &'a mut T,
+}
+
 impl PhysAllocator {
     // Fails if there are no nonempty unused memory regions
     pub fn new(boot_info: &BootInfo) -> Option<Self> {
@@ -63,6 +68,20 @@ impl PhysAllocator {
                 phys_addr: phys_start,
                 virt_addr: phys_start + self.physical_memory_offset,
             }
+        }
+    }
+
+    pub fn alloc32<'a, T>(&mut self) -> DualPtr32<'a, T> {
+        let DualAddr {
+            phys_addr,
+            virt_addr,
+        } = self.get_hunk(size_of::<T>() as u64);
+
+        debug_assert!(phys_addr <= u32::MAX as u64);
+
+        DualPtr32 {
+            r_phys: phys_addr as u32,
+            rw_virt: unsafe { &mut *(virt_addr as *mut T) },
         }
     }
 }
