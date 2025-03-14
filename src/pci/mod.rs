@@ -1,11 +1,7 @@
-use core::{mem::transmute, ptr::slice_from_raw_parts};
-
-use audio_ac97::{music_loop::MusicLoop, AudioAc97};
+use audio_ac97::AudioAc97;
 use headers::{parse_header_common, parse_header_type0};
 use io::pci_config_read_word;
 use pluggable_interrupt_os::println;
-
-use crate::PhysAllocator;
 
 pub mod audio_ac97;
 mod headers;
@@ -21,34 +17,6 @@ pub struct PciDevices {
     pub ac97: Option<AudioAc97>,
     // We could add more devices here, if we wanted
 }
-
-// pub fn init_pci(phys_alloc: &mut PhysAllocator) {
-//     let l = WAV_DATA.len();
-//     println!("WOW! {} mebibytes!", l / 1024 / 1024);
-//     debug_assert!(l % 2 == 0);
-//     let wav_raw = slice_from_raw_parts::<i16>(WAV_DATA.as_ptr() as *const i16, l / 2);
-//     let wav = unsafe { &*wav_raw };
-//     debug_assert!(
-//         WAV_DATA.len() == wav.len() * 2,
-//         "{} != {}",
-//         WAV_DATA.len(),
-//         wav.len() * 2
-//     );
-//     debug_assert!({
-//         // relies on little endian
-//         let thing = (WAV_DATA[1] as u16) << 8 | WAV_DATA[0] as u16;
-//         wav[0] == unsafe { transmute(thing) }
-//     });
-//
-//     let PciDevices { ac97 } = scan_pci_devices();
-//
-//     let mut music = MusicLoop::new(phys_alloc, wav, ac97.unwrap());
-//
-//     music.play();
-//     loop {
-//         music.wind();
-//     }
-// }
 
 pub fn scan_pci_devices() -> PciDevices {
     let mut audio = None;

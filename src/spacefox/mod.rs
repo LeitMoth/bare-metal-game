@@ -1,14 +1,9 @@
-use core::slice::from_raw_parts;
-
 use crate::{
     pci::audio_ac97::{music_loop::MusicLoop, AudioAc97},
     phys_alloc::PhysAllocator,
 };
 use music_data::WAV_DATA_SAMPLES;
-use pluggable_interrupt_os::{
-    println,
-    vga_buffer::{is_drawable, plot, Color, ColorCode, BUFFER_HEIGHT, BUFFER_WIDTH},
-};
+use pluggable_interrupt_os::vga_buffer::{plot, Color, ColorCode, BUFFER_HEIGHT};
 
 mod music_data;
 
