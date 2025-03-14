@@ -8,7 +8,7 @@ use io::{
 use pluggable_interrupt_os::{print, println};
 use volatile::Volatile;
 
-use crate::PhysAllocator;
+use crate::{phys_alloc::DualPtr32, PhysAllocator};
 
 mod headers;
 mod io;
@@ -40,16 +40,38 @@ struct BufferDescriptor {
     // Other bits=Reserved
     control: u16,
 }
+type BDL = [Volatile<BufferDescriptor>; NUM_BUFFERS];
 
+const SAMPLES_IN_BLOB: usize = SAMPLES_PER_BUF as usize * NUM_BUFFERS;
+type SamplesBlob = [Volatile<i16>; SAMPLES_IN_BLOB];
 struct MusicLoop<'a> {
     ac97: AudioAc97,
     music_data: &'a [i16],
     music_data_read_head: usize,
-    sound_blob: &'a mut [i16],
+    samples_blob: DualPtr32<'a, SamplesBlob>,
+    buffer_descriptor_list: DualPtr32<'a, BDL>,
     last_buffer_filled: u8,
 }
 
 impl<'a> MusicLoop<'a> {
+    fn play(&mut self) {
+        self.fill_sound_blob();
+
+        self.ac97.init();
+        self.ac97
+            .begin_transfer(self.buffer_descriptor_list.r_phys, NUM_BUFFERS as u8 - 1);
+    }
+
+    // should be done before the transfer is started
+    fn fill_sound_blob(&mut self) {
+        for i in 0..self.samples_blob.rw_virt.len() {
+            self.samples_blob.rw_virt[i] =
+                Volatile::new(self.music_data[i % self.music_data.len()]);
+        }
+    }
+
+    // must be called repeatedly after the transfer is started
+    // to continue to supply audio frames
     fn wind(&mut self) {
         debug_assert!(NUM_BUFFERS == 32); // if this changes, the bit mask won't work;
         const MOD32_MASK: u8 = 0b11111;
@@ -62,7 +84,8 @@ impl<'a> MusicLoop<'a> {
             let mut buf_write_head = 0;
             while buf_write_head < SAMPLES_PER_BUF {
                 let write_pos = i as usize * BYTES_PER_BUF as usize + buf_write_head as usize;
-                self.sound_blob[write_pos] = self.music_data[self.music_data_read_head];
+                self.samples_blob.rw_virt[write_pos] =
+                    Volatile::new(self.music_data[self.music_data_read_head]);
                 buf_write_head += 1;
                 self.music_data_read_head += 1;
                 if self.music_data_read_head >= self.music_data.len() {
