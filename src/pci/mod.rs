@@ -7,50 +7,50 @@ use pluggable_interrupt_os::println;
 
 use crate::PhysAllocator;
 
-mod audio_ac97;
+pub mod audio_ac97;
 mod headers;
 mod io;
 
 // Everything here makes extensive use of: https://wiki.osdev.org/PCI
 // as well as some of the references from the bottom of that page.
 
-static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/something_like_megaman2.raw");
+// static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/something_like_megaman2.raw");
 // static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/snippet.raw");
 
-struct PciDevices {
-    ac97: Option<AudioAc97>,
+pub struct PciDevices {
+    pub ac97: Option<AudioAc97>,
     // We could add more devices here, if we wanted
 }
 
-pub fn init_pci(phys_alloc: &mut PhysAllocator) {
-    let l = WAV_DATA.len();
-    println!("WOW! {} mebibytes!", l / 1024 / 1024);
-    debug_assert!(l % 2 == 0);
-    let wav_raw = slice_from_raw_parts::<i16>(WAV_DATA.as_ptr() as *const i16, l / 2);
-    let wav = unsafe { &*wav_raw };
-    debug_assert!(
-        WAV_DATA.len() == wav.len() * 2,
-        "{} != {}",
-        WAV_DATA.len(),
-        wav.len() * 2
-    );
-    debug_assert!({
-        // relies on little endian
-        let thing = (WAV_DATA[1] as u16) << 8 | WAV_DATA[0] as u16;
-        wav[0] == unsafe { transmute(thing) }
-    });
+// pub fn init_pci(phys_alloc: &mut PhysAllocator) {
+//     let l = WAV_DATA.len();
+//     println!("WOW! {} mebibytes!", l / 1024 / 1024);
+//     debug_assert!(l % 2 == 0);
+//     let wav_raw = slice_from_raw_parts::<i16>(WAV_DATA.as_ptr() as *const i16, l / 2);
+//     let wav = unsafe { &*wav_raw };
+//     debug_assert!(
+//         WAV_DATA.len() == wav.len() * 2,
+//         "{} != {}",
+//         WAV_DATA.len(),
+//         wav.len() * 2
+//     );
+//     debug_assert!({
+//         // relies on little endian
+//         let thing = (WAV_DATA[1] as u16) << 8 | WAV_DATA[0] as u16;
+//         wav[0] == unsafe { transmute(thing) }
+//     });
+//
+//     let PciDevices { ac97 } = scan_pci_devices();
+//
+//     let mut music = MusicLoop::new(phys_alloc, wav, ac97.unwrap());
+//
+//     music.play();
+//     loop {
+//         music.wind();
+//     }
+// }
 
-    let ac97 = init_audio().unwrap();
-
-    let mut music = MusicLoop::new(phys_alloc, wav, ac97);
-
-    music.play();
-    loop {
-        music.wind();
-    }
-}
-
-fn scan_pci() -> PciDevices {
+pub fn scan_pci_devices() -> PciDevices {
     let mut audio = None;
 
     for bus in 0..=255 {
@@ -72,40 +72,8 @@ fn scan_pci() -> PciDevices {
                     if audio.is_some() {
                         println!("Warning, found multiple AC97 devices!");
                     }
+
                     audio = Some(AudioAc97::new(bus, device, full_header));
-
-                    // println!(
-                    //     "I {} {} {:#018b} {:#018b}",
-                    //     full_header.interrupt_pin,
-                    //     full_header.interrupt_line,
-                    //     full_header.headhead.command,
-                    //     full_header.headhead.status
-                    // );
-                    //
-                    // // Here I was chainging the interupt line, I don't think I ever figure out how
-                    // // to use interrupts though
-                    // pci_config_modify(bus, device, 0, 0xF, |x| {
-                    //     let tmp = x & !0xFF_FF;
-                    //     let tmp = tmp | 0x00_5C;
-                    //
-                    //     println!("modifying {x:#b} to {tmp:#b}");
-                    //
-                    //     tmp
-                    // });
-                    //
-                    // {
-                    //     let (_, _, pin, line) =
-                    //         quarter_u32(pci_config_read_u32(bus, device, 0, 0xF));
-                    //     println!("I {} {}", pin, line,);
-                    // }
-
-                    // let x = boot_info.physical_memory_offset;
-                    // audio = Some(AudioAc97 {
-                    //     bus,
-                    //     slot: device,
-                    //     mixer_port_base: (full_header.base_addresses[0] & 0xFFFFFFFC) as u16,
-                    //     buffer_port_base: (full_header.base_addresses[1] & 0xFFFFFFFC) as u16,
-                    // });
                 }
             }
         }
