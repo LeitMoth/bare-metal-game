@@ -47,6 +47,35 @@ pub fn init_pci(phys_alloc: &mut PhysAllocator) {
     // check_all();
     let a = init_audio(phys_alloc).unwrap();
     a.play();
+
+    const WAV_SAMPLES: usize = 0x1000;
+    type Frame = [i16; WAV_SAMPLES * 2];
+    let d_samples = phys_alloc.get_hunk(size_of::<Frame>() as u64);
+    let ptr_samples = d_samples.virt_addr as *mut Frame;
+    unsafe {
+        for i in 0..WAV_SAMPLES {
+            let val = (i as i16).wrapping_mul(79);
+            (*ptr_samples)[2 * i] = val;
+            (*ptr_samples)[2 * i + 1] = val;
+        }
+    }
+
+    type BDL = [BufferDescriptor; 32];
+    let d_bdl = phys_alloc.get_hunk(size_of::<BDL>() as u64);
+    let ptr_bdl = d_bdl.virt_addr as *mut BDL;
+    let bd = BufferDescriptor {
+        physical_addr: d_samples.phys_addr as u32,
+        num_samples: WAV_SAMPLES as u16,
+        control: 0,
+    };
+
+    unsafe {
+        for i in 0..32 {
+            (*ptr_bdl)[i] = bd.clone();
+        }
+    }
+
+    thing.play(d_bdl.phys_addr);
 }
 
 const WAVSIZE: usize = 0x1000;

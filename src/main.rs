@@ -4,14 +4,12 @@
 mod pci;
 mod phys_alloc;
 
-use core::{mem, ptr::copy_nonoverlapping};
-
-use bootloader::{bootinfo::MemoryRegion, BootInfo};
+use bootloader::BootInfo;
 use crossbeam::atomic::AtomicCell;
 use pc_keyboard::DecodedKey;
 use pci::init_pci;
 use phys_alloc::PhysAllocator;
-use pluggable_interrupt_os::{println, vga_buffer::clear_screen, HandlerTable};
+use pluggable_interrupt_os::{vga_buffer::clear_screen, HandlerTable};
 use pluggable_interrupt_template::LetterMover;
 
 #[no_mangle]
@@ -66,5 +64,5 @@ fn tick() {
 }
 
 fn startup() {
-    // clear_screen();
+    clear_screen();
 }

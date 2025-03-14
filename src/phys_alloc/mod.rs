@@ -10,8 +10,8 @@ pub struct PhysAllocator {
 }
 
 pub struct DualAddr {
-    phys_addr: u64,
-    virt_addr: u64,
+    pub phys_addr: u64,
+    pub virt_addr: u64,
 }
 
 impl PhysAllocator {
@@ -39,11 +39,17 @@ impl PhysAllocator {
         }
     }
 
-    fn get_hunk(&mut self, size: u64) -> DualAddr {
+    // Aligns by 4
+    pub fn get_hunk(&mut self, size: u64) -> DualAddr {
         let phys_mem_start = self.prime_region.range.start_addr();
         let phys_mem_end = self.prime_region.range.end_addr();
 
-        let phys_start = phys_mem_start + self.offset;
+        let mut phys_start = phys_mem_start + self.offset;
+        // align to 4 byte boundary
+        while phys_start % 4 != 0 {
+            phys_start += 1;
+        }
+        // end should be exclusive
         let phys_end = phys_start + size;
 
         if phys_end > phys_mem_end {
@@ -52,7 +58,7 @@ impl PhysAllocator {
                 phys_end - phys_mem_end
             );
         } else {
-            self.offset += size;
+            self.offset = phys_end;
             DualAddr {
                 phys_addr: phys_start,
                 virt_addr: phys_start + self.physical_memory_offset,
