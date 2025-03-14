@@ -18,8 +18,9 @@ lazy_static! {
         // dummy static used to create aligned data
         static ALIGNED: &'static AlignedTo<i16, [u8]> = &AlignedTo {
             _align: [],
-            bytes: *include_bytes!("../../../../../../Documents/snippet.raw"),
+            // bytes: *include_bytes!("../../../../../../Documents/snippet.raw"),
             // bytes: *include_bytes!("../../../../../../Documents/something_like_megaman2.raw"),
+            bytes: *include_bytes!("../../music/something_like_megaman2.raw"),
         };
 
         static ALIGNED_BYTES: &'static [u8] = &ALIGNED.bytes;
