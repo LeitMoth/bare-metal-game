@@ -2,7 +2,9 @@ use volatile::Volatile;
 
 use crate::pci::io::{io_space_bar_read, io_space_bar_write, pci_config_modify};
 
-mod music_loop;
+use super::headers::PciHeaderType0;
+
+pub mod music_loop;
 
 // I reffered heavily to https://wiki.osdev.org/AC97
 // and peeked a few times at the refernced BleskOS driver.
@@ -56,6 +58,22 @@ impl AudioAc97 {
     const CURRENT_PROCESSED_ENTRY_OFFSET: u16 = 0x04;
     const TRANSFER_CONTROL_OFFSET: u16 = 0x0B;
 
+    pub fn new(bus: u8, slot: u8, header: PciHeaderType0) -> Self {
+        Self {
+            bus,
+            slot,
+            // https://wiki.osdev.org/AC97#Detecting_AC97_sound_card
+            // From here, BAR0 and BAR1 are garaunteed to be IO bars
+            //
+            // https://wiki.osdev.org/PCI#Address_and_size_of_the_BAR
+            // The info here is kind of misleading, because as far as I can tell,
+            // io bars must be 16 bits, and the wiki makes it sound like
+            // then can be much larger. But the bit mask works correctly.
+            mixer_port_base: (header.base_addresses[0] & 0xFFFFFFFC) as u16,
+            buffer_port_base: (header.base_addresses[1] & 0xFFFFFFFC) as u16,
+        }
+    }
+
     fn set_filled_up_to(&self, buf: u8) {
         debug_assert!((buf as usize) < NUM_BUFFERS);
 
@@ -93,7 +111,9 @@ impl AudioAc97 {
         // anything else
         pci_config_modify(self.bus, self.slot, 0, 0x1, |x| x | 0b101);
 
-        // Blesk does this in a different spot, osdev doesn't say to do it at all
+        // Blesk does this in a different spot, osdev doesn't say to do it at all.
+        // 0xFFFF isn't really necessary, we just need to write something.
+        // TODO(colin): clean up magic constant 0x00
         io_space_bar_write::<u16>(self.mixer_port_base + 0x00, 0xFFFF);
 
         // This is not from the wiki, but Blesk does this first

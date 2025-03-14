@@ -9,7 +9,7 @@ use super::{
 const SAMPLES_IN_BLOB: usize = SAMPLES_PER_BUF as usize * NUM_BUFFERS;
 type SamplesBlob = [Volatile<i16>; SAMPLES_IN_BLOB];
 
-struct MusicLoop<'a> {
+pub struct MusicLoop<'a> {
     ac97: AudioAc97,
     music_data: &'a [i16],
     music_data_read_head: usize,
@@ -20,7 +20,7 @@ struct MusicLoop<'a> {
 
 impl<'a> MusicLoop<'a> {
     // Assumes audio is in 16 bit samples
-    fn new(phys_alloc: &mut PhysAllocator, music_data: &'a [i16], ac97: AudioAc97) -> Self {
+    pub fn new(phys_alloc: &mut PhysAllocator, music_data: &'a [i16], ac97: AudioAc97) -> Self {
         let samples_blob = phys_alloc.alloc32::<SamplesBlob>();
         let buffer_descriptor_list = phys_alloc.alloc32::<BufferDescriptorList>();
 
@@ -64,7 +64,7 @@ impl<'a> MusicLoop<'a> {
     }
 
     // starts the loop
-    fn play(&mut self) {
+    pub fn play(&mut self) {
         self.ac97.init();
         self.ac97
             .begin_transfer(self.buffer_descriptor_list.r_phys, NUM_BUFFERS as u8 - 1);
@@ -72,7 +72,7 @@ impl<'a> MusicLoop<'a> {
 
     // must be called repeatedly after the transfer is started
     // to continue to supply audio frames
-    fn wind(&mut self) {
+    pub fn wind(&mut self) {
         debug_assert!(NUM_BUFFERS == 32); // if this changes, the bit mask won't work;
         const MOD32_MASK: u8 = 0b11111;
         let current_buf: u8 = self.ac97.get_current_buffer();
