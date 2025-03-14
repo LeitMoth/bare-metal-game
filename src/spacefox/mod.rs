@@ -83,25 +83,90 @@ enum Prim {
     Quad(Vec3f, Vec3f, Vec3f, Vec3f),
 }
 
-pub struct SpaceFox<'a> {
+pub struct Game<'a> {
     music: MusicLoop<'a>,
+    music_started: bool,
+    state: GameState,
+}
+
+enum GameState {
+    Menu(bool),
+    SpaceFox(SpaceFox),
+    GameOver(u16),
+}
+
+pub struct SpaceFox {
     b: usize,
     lines: [LineBank; 2],
     end: [usize; 2],
     world: World,
+    xvel: f32,
+    yvel: f32,
 }
 
 const PLAYER: usize = 1;
 const BLOCK: usize = 0;
 
-impl<'a> SpaceFox<'a> {
+impl<'a> Game<'a> {
     pub fn new(phys_alloc: &mut PhysAllocator, ac97: AudioAc97) -> Self {
         let music = MusicLoop::new(phys_alloc, &WAV_DATA_SAMPLES, ac97);
+        Self {
+            music,
+            music_started: false,
+            state: GameState::Menu(false),
+        }
+    }
 
+    pub fn tick(&mut self) {
+        if self.music_started {
+            self.music.wind();
+        }
+        match self.state {
+            GameState::Menu(pressed_play) => {
+                clear_screen();
+                println!("SpaceFox x86_64");
+                println!("Press any key to play!");
+                if pressed_play {
+                    clear_screen();
+                    if !self.music_started {
+                        self.music.play();
+                        self.music_started = true;
+                    }
+                    self.state = GameState::SpaceFox(SpaceFox::new());
+                }
+            }
+            GameState::SpaceFox(ref mut space_fox) => {
+                if space_fox.update() {
+                    space_fox.draw();
+                } else {
+                    self.state = GameState::GameOver(50);
+                }
+            }
+            GameState::GameOver(ref mut ticks) => {
+                *ticks -= 1;
+                if *ticks == 0 {
+                    self.state = GameState::Menu(false);
+                }
+            }
+        }
+    }
+
+    pub fn key(&mut self, k: DecodedKey) {
+        match self.state {
+            GameState::Menu(ref mut pressed_play) => *pressed_play = true,
+            GameState::SpaceFox(ref mut space_fox) => space_fox.key(k),
+            GameState::GameOver(_) => {}
+        }
+    }
+}
+
+impl SpaceFox {
+    pub fn new() -> Self {
         let mut world = [Default::default(); 30];
+
         world[PLAYER] = Model {
             prims: SHIP_TRIS,
-            pos: v([0.0, -1.0, 15.0]),
+            pos: v([0.0, -3.0, 15.0]),
             scale: 1.0,
         };
 
@@ -112,11 +177,12 @@ impl<'a> SpaceFox<'a> {
         };
 
         Self {
-            music,
             lines: [[Default::default(); 100], [Default::default(); 100]],
             end: [0, 0],
             b: 0,
             world,
+            xvel: 0.0,
+            yvel: 0.0,
         }
     }
 
@@ -137,14 +203,32 @@ impl<'a> SpaceFox<'a> {
         }
     }
 
-    pub fn update(&mut self) {
-        self.music.wind();
-
+    pub fn update(&mut self) -> bool {
         {
             let z = self.world[BLOCK].pos.z;
             self.world[BLOCK].pos.z -= (0.01 * z + 3.0).max(1.0);
             if self.world[BLOCK].pos.z < -5.0 {
                 self.world[BLOCK].pos.z = 300.0;
+            }
+        }
+
+        {
+            let x = &mut self.world[PLAYER].pos.x;
+            *x += self.xvel;
+            if *x < -3.0 {
+                *x = -3.0;
+            }
+            if *x > 3.0 {
+                *x = 3.0;
+            }
+
+            let y = &mut self.world[PLAYER].pos.y;
+            *y += self.yvel;
+            if *y < -4.0 {
+                *y = -4.0;
+            }
+            if *y > 5.0 {
+                *y = 5.0;
             }
         }
 
@@ -272,6 +356,14 @@ impl<'a> SpaceFox<'a> {
         }
 
         self.end[self.b] = next_line;
+
+        let p1 = self.world[BLOCK].pos;
+        let p2 = self.world[PLAYER].pos;
+        let dx = p1.x - p2.x;
+        let dy = p1.y - p2.y;
+        let dz = p1.z - p2.z;
+
+        dx * dx + dy * dy + dz * dz > 1.0
     }
 
     pub fn draw(&mut self) {
@@ -280,33 +372,28 @@ impl<'a> SpaceFox<'a> {
         self.end[d] = 0;
         draw_lines(&self.lines[self.b], self.end[self.b]);
         self.swap_buffer();
-        // clear_screen();
-
-        // let myplot = |x, y| {
-        //     if x < 0 || y < 0 {
-        //         return;
-        //     }
-        //     plot(
-        //         '|',
-        //         y as usize,
-        //         x as usize,
-        //         ColorCode::new(Color::LightCyan, Color::Black),
-        //     );
-        // };
-        // plot_line(&[5, 7, 20, 20], myplot);
     }
 
     pub fn key(&mut self, k: DecodedKey) {
+        const XSPEED: f32 = 0.7;
         match k {
+            DecodedKey::Unicode('a') => self.xvel = -XSPEED,
+            DecodedKey::Unicode('d') => self.xvel = XSPEED,
+            DecodedKey::Unicode('w') => self.yvel = XSPEED,
+            DecodedKey::Unicode('s') => self.yvel = -XSPEED,
+            DecodedKey::Unicode(' ') => {
+                self.xvel = 0.0;
+                self.yvel = 0.0;
+            }
             // DecodedKey::RawKey(key_code) => todo!(),
-            DecodedKey::Unicode('a') => self.world[PLAYER].pos.x -= 1.0,
-            DecodedKey::Unicode('d') => self.world[PLAYER].pos.x += 1.0,
-            DecodedKey::Unicode('w') => self.world[PLAYER].pos.y += 1.0,
-            DecodedKey::Unicode('s') => self.world[PLAYER].pos.y -= 1.0,
-            DecodedKey::Unicode('u') => self.world[PLAYER].scale += 0.1,
-            DecodedKey::Unicode('p') => self.world[PLAYER].scale -= 0.1,
-            DecodedKey::Unicode('q') => self.world[PLAYER].pos.z += 1.0,
-            DecodedKey::Unicode('e') => self.world[PLAYER].pos.z -= 1.0,
+            // DecodedKey::Unicode('a') => self.world[PLAYER].pos.x -= 1.0,
+            // DecodedKey::Unicode('d') => self.world[PLAYER].pos.x += 1.0,
+            // DecodedKey::Unicode('w') => self.world[PLAYER].pos.y += 1.0,
+            // DecodedKey::Unicode('s') => self.world[PLAYER].pos.y -= 1.0,
+            // DecodedKey::Unicode('u') => self.world[PLAYER].scale += 0.1,
+            // DecodedKey::Unicode('p') => self.world[PLAYER].scale -= 0.1,
+            // DecodedKey::Unicode('q') => self.world[PLAYER].pos.z += 1.0,
+            // DecodedKey::Unicode('e') => self.world[PLAYER].pos.z -= 1.0,
             // DecodedKey::Unicode(_) => todo!(),
             _ => {}
         }
@@ -322,21 +409,9 @@ fn clear_lines(lb: &LineBank, end: usize) {
 }
 
 fn draw_lines(lb: &LineBank, end: usize) {
-    let myplot = |c, x, y, color| {
-        if x < 0 || y < 0 || x >= BUFFER_WIDTH as i32 || y >= BUFFER_HEIGHT as i32 {
-            return;
-        }
-        plot(
-            c,
-            x as usize,
-            y as usize,
-            ColorCode::new(color, Color::Black),
-        );
-    };
-    for (i, l) in lb[0..end].iter().enumerate() {
+    for l in &lb[0..end] {
         if l != &[0, 0, 0, 0, 0, 0, 0] {
-            let color = if i > 10 { Color::LightCyan } else { Color::Red };
-            plot_line_depth(l, myplot);
+            plot_line_depth(l);
         }
     }
 }
@@ -344,10 +419,7 @@ fn draw_lines(lb: &LineBank, end: usize) {
 // Bresenham's line algorithm, adapted from:
 // https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
 
-pub fn plot_line_depth(
-    &[x1, y1, z1, x2, y2, z2, cbit]: &Line,
-    mut plot: impl FnMut(char, i32, i32, Color),
-) {
+pub fn plot_line_depth(&[x1, y1, z1, x2, y2, z2, cbit]: &Line) {
     let color = if cbit == 0 {
         Color::LightCyan
     } else {
@@ -376,7 +448,14 @@ pub fn plot_line_depth(
         const GRAD: &[char] = &['#', '#', '#', '@', '*', ',', ',', '.'];
         let c = if cbit == 1 { GRAD[i as usize] } else { '*' };
 
-        plot(c, x1, y1, color);
+        if x1 >= 0 && x1 < BUFFER_WIDTH as i32 && y1 >= 0 && y1 < BUFFER_HEIGHT as i32 {
+            plot(
+                c,
+                x1 as usize,
+                y1 as usize,
+                ColorCode::new(color, Color::Black),
+            );
+        }
         // plot('b', x1, y1, color);
         if x1 == x2 && y1 == y2 {
             break;

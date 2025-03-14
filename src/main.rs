@@ -11,7 +11,7 @@ use pc_keyboard::DecodedKey;
 use pci::scan_pci_devices;
 use phys_alloc::PhysAllocator;
 use pluggable_interrupt_os::{vga_buffer::clear_screen, HandlerTable};
-use spacefox::SpaceFox;
+use spacefox::Game;
 
 #[no_mangle]
 pub extern "C" fn _start(boot_info: &'static BootInfo) -> ! {
@@ -35,19 +35,16 @@ fn cpu_loop() -> ! {
     let devs = scan_pci_devices();
     let ac97 = devs.ac97.unwrap();
 
-    let mut spacefox = SpaceFox::new(&mut phys_alloc, ac97);
-
-    spacefox.start_game();
+    let mut game = Game::new(&mut phys_alloc, ac97);
 
     loop {
         if let Ok(_) = TICKED.compare_exchange(true, false) {
-            spacefox.update();
-            spacefox.draw();
+            game.tick()
         }
 
         if let Ok(k) = LAST_KEY.fetch_update(|k| if k.is_some() { Some(None) } else { None }) {
             if let Some(k) = k {
-                spacefox.key(k);
+                game.key(k);
             }
         }
     }
