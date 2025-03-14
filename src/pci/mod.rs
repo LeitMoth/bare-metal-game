@@ -5,7 +5,6 @@ use io::{
     io_space_bar_read, io_space_bar_write, pci_config_modify, pci_config_read_u32,
     pci_config_read_word,
 };
-use lazy_static::lazy_static;
 use pluggable_interrupt_os::{print, println};
 use volatile::Volatile;
 
@@ -16,6 +15,28 @@ mod io;
 
 static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/something_like_megaman2.raw");
 // static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/snippet.raw");
+
+#[repr(packed)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct BufferDescriptor {
+    physical_addr: u32,
+    num_samples: u16,
+    // From https://wiki.osdev.org/AC97#Buffer%20Descriptor%20List
+    // Bit 15=Interrupt fired when data from this entry is transferred
+    // Bit 14=Last entry of buffer, stop playing
+    // Other bits=Reserved
+    control: u16,
+}
+
+#[derive(Debug)]
+struct AudioAc97 {
+    bus: u8,
+    slot: u8,
+    // reset, device selection, volume control
+    bar0: u16,
+    // audio data
+    bar1: u16,
+}
 
 /*
 Everything here makes extensive reference of: https://wiki.osdev.org/PCI
@@ -78,45 +99,10 @@ pub fn init_pci(phys_alloc: &mut PhysAllocator) {
     }
 
     // check_all();
-    let a = init_audio(phys_alloc).unwrap();
+    let a = init_audio().unwrap();
     println!("FREE: {}", phys_alloc.kb_free());
 
     a.play(bdl.r_phys);
-}
-
-const WAVSIZE: usize = 0x1000;
-
-lazy_static! {
-    static ref SAMPLE: [Volatile<i16>; WAVSIZE * 2] = {
-        let mut x = [0i16; WAVSIZE * 2];
-        for i in 0..x.len() {
-            x[i] = (i as i16).wrapping_mul(79);
-        }
-        x.map(Volatile::new)
-    };
-}
-
-// #[repr(packed)]
-#[repr(align(4))]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct BufferDescriptor {
-    physical_addr: u32,
-    num_samples: u16,
-    // From https://wiki.osdev.org/AC97#Buffer%20Descriptor%20List
-    // Bit 15=Interrupt fired when data from this entry is transferred
-    // Bit 14=Last entry of buffer, stop playing
-    // Other bits=Reserved
-    control: u16,
-}
-
-#[derive(Debug)]
-struct AudioAc97 {
-    bus: u8,
-    slot: u8,
-    // reset, device selection, volume control
-    bar0: u16,
-    // audio data
-    bar1: u16,
 }
 
 impl AudioAc97 {
@@ -228,7 +214,7 @@ impl AudioAc97 {
     }
 }
 
-fn init_audio(phys_alloc: &mut PhysAllocator) -> Option<AudioAc97> {
+fn init_audio() -> Option<AudioAc97> {
     let mut audio = None;
 
     for bus in 0..=255 {
@@ -289,53 +275,53 @@ fn init_audio(phys_alloc: &mut PhysAllocator) -> Option<AudioAc97> {
     audio
 }
 
-struct Vendor(u16);
-impl Vendor {
-    fn id(&self) -> Option<u16> {
-        if self.0 == 0xFFFF {
-            None
-        } else {
-            Some(self.0)
-        }
-    }
-}
-fn pci_check_vendor(bus: u8, slot: u8) -> Vendor {
-    Vendor(pci_config_read_word(bus, slot, 0, 0))
-}
-
-fn check_all() {
-    for bus in 0..=255 {
-        for device in 0..32 {
-            let v = pci_check_vendor(bus, device);
-            if let Some(id) = v.id() {
-                let h = parse_header_common(bus, device, 0);
-                debug_assert!(id == h.vendor_id);
-
-                println!(
-                    "BUS{bus}   DEVICE{device}   V:D {:#06X}:{:#06X}    CLS:SUBCLS {:#04X}:{:#04X}   HTY{:#04X}",
-                    h.vendor_id, h.device_id, h.class_code, h.subclass, h.header_type
-                );
-
-                if h.header_type == 1 {
-                    println!("{h:#X?}");
-                    return;
-                }
-
-                if false && h.header_type == 0 {
-                    let h = parse_header_type0(bus, device, 0, h);
-
-                    if h.headhead.class_code == 0x4 {
-                        println!("{h:#X?}");
-                        println!("{:#013b}", h.headhead.command);
-
-                        // https://wiki.osdev.org/AC97#Detecting_AC97_sound_card
-                        pci_config_modify(bus, device, 0, 0x1, |x| x | 0b101);
-
-                        let (_, command) = half_u32(pci_config_read_u32(bus, device, 0, 1));
-                        println!("{:#013b}", command);
-                    }
-                }
-            }
-        }
-    }
-}
+// struct Vendor(u16);
+// impl Vendor {
+//     fn id(&self) -> Option<u16> {
+//         if self.0 == 0xFFFF {
+//             None
+//         } else {
+//             Some(self.0)
+//         }
+//     }
+// }
+// fn pci_check_vendor(bus: u8, slot: u8) -> Vendor {
+//     Vendor(pci_config_read_word(bus, slot, 0, 0))
+// }
+//
+// fn check_all() {
+//     for bus in 0..=255 {
+//         for device in 0..32 {
+//             let v = pci_check_vendor(bus, device);
+//             if let Some(id) = v.id() {
+//                 let h = parse_header_common(bus, device, 0);
+//                 debug_assert!(id == h.vendor_id);
+//
+//                 println!(
+//                     "BUS{bus}   DEVICE{device}   V:D {:#06X}:{:#06X}    CLS:SUBCLS {:#04X}:{:#04X}   HTY{:#04X}",
+//                     h.vendor_id, h.device_id, h.class_code, h.subclass, h.header_type
+//                 );
+//
+//                 if h.header_type == 1 {
+//                     println!("{h:#X?}");
+//                     return;
+//                 }
+//
+//                 if false && h.header_type == 0 {
+//                     let h = parse_header_type0(bus, device, 0, h);
+//
+//                     if h.headhead.class_code == 0x4 {
+//                         println!("{h:#X?}");
+//                         println!("{:#013b}", h.headhead.command);
+//
+//                         // https://wiki.osdev.org/AC97#Detecting_AC97_sound_card
+//                         pci_config_modify(bus, device, 0, 0x1, |x| x | 0b101);
+//
+//                         let (_, command) = half_u32(pci_config_read_u32(bus, device, 0, 1));
+//                         println!("{:#013b}", command);
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
