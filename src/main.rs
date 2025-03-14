@@ -47,7 +47,7 @@ fn cpu_loop() -> ! {
 
         if let Ok(k) = LAST_KEY.fetch_update(|k| if k.is_some() { Some(None) } else { None }) {
             if let Some(k) = k {
-                // spacefox.key(k);
+                spacefox.key(k);
             }
         }
     }

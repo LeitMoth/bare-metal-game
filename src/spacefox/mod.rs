@@ -3,69 +3,221 @@ use crate::{
     phys_alloc::PhysAllocator,
 };
 use music_data::WAV_DATA_SAMPLES;
-use pluggable_interrupt_os::vga_buffer::{plot, Color, ColorCode, BUFFER_HEIGHT};
+use pc_keyboard::DecodedKey;
+use pluggable_interrupt_os::{
+    print, println,
+    vga_buffer::{clear_screen, plot, Color, ColorCode, BUFFER_HEIGHT, BUFFER_WIDTH},
+};
 
 mod music_data;
 
 type Line = [i8; 4];
 type LineBank = [Line; 100];
 
-type WorldLine = [f32; 4];
-type WorldLineBank = [WorldLine; 100];
+const fn v(value: [f32; 3]) -> Vec3f {
+    Vec3f {
+        x: value[0],
+        y: value[1],
+        z: value[2],
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct Vec3f {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+type World = [Model; 30];
+
+#[derive(Default, Clone, Copy)]
+struct Model {
+    prims: &'static [Prim],
+    pos: Vec3f,
+    scale: f32,
+}
+
+const SHIPV1: Vec3f = v([-1.361523, -0.532862, -6.396634]);
+const SHIPV2: Vec3f = v([0.000000, 0.299368, 0.285550]);
+const SHIPV3: Vec3f = v([0.000000, -0.492211, 0.303217]);
+const SHIPV4: Vec3f = v([0.000000, -0.036415, -1.398604]);
+const SHIPF1: Prim = Prim::Tri(SHIPV1, SHIPV2, SHIPV4);
+const SHIPF2: Prim = Prim::Tri(SHIPV3, SHIPV1, SHIPV4);
+const SHIP_TRIS: &[Prim] = &[SHIPF1, SHIPF2];
+
+#[derive(Default, Clone, Copy)]
+enum Prim {
+    #[default]
+    Noop,
+    Tri(Vec3f, Vec3f, Vec3f),
+    Quad(Vec3f, Vec3f, Vec3f, Vec3f),
+}
 
 pub struct SpaceFox<'a> {
     music: MusicLoop<'a>,
-    even_lines: LineBank,
-    odd_lines: LineBank,
-    world: WorldLineBank,
+    b: usize,
+    lines: [LineBank; 2],
+    world: World,
 }
 
 impl<'a> SpaceFox<'a> {
     pub fn new(phys_alloc: &mut PhysAllocator, ac97: AudioAc97) -> Self {
         let music = MusicLoop::new(phys_alloc, &WAV_DATA_SAMPLES, ac97);
 
-        let mut even_lines = [Default::default(); 100];
-        even_lines[0] = [5, 5, 10, 10];
+        let mut world = [Default::default(); 30];
+        world[0] = Model {
+            prims: SHIP_TRIS,
+            pos: v([0.0, -1.0, 15.0]),
+            scale: 1.0,
+        };
 
         Self {
             music,
-            even_lines,
-            odd_lines: [Default::default(); 100],
-            world: [Default::default(); 100],
+            lines: [[Default::default(); 100], [Default::default(); 100]],
+            b: 0,
+            world,
         }
     }
 
+    fn swap_buffer(&mut self) {
+        self.b ^= 1
+    }
+
     pub fn start_game(&mut self) {
-        self.music.play();
+        // self.music.play();
+        let c = ColorCode::new(Color::Yellow, Color::LightGray);
+        for x in 0..BUFFER_WIDTH {
+            plot('@', x, 0, c);
+            plot('@', x, BUFFER_HEIGHT - 1, c);
+        }
+        for y in 0..BUFFER_HEIGHT {
+            plot('@', 0, y, c);
+            plot('@', BUFFER_WIDTH - 1, y, c);
+        }
     }
 
     pub fn update(&mut self) {
         self.music.wind();
 
-        let y1 = self.even_lines[0][1];
+        // self.world[0].pos.x += 0.1;
 
-        self.even_lines[0][1] = (y1 + 1) % BUFFER_HEIGHT as i8;
+        let mut next_line = 0;
+        for Model { prims, pos, scale } in self.world {
+            for p in prims {
+                match p {
+                    Prim::Noop => {}
+                    Prim::Tri(p1, p2, p3) => {
+                        if next_line + 3 >= self.lines[0].len() {
+                            break;
+                        }
+                        // if [p1.z, p2.z, p3.z].iter().any(|z| *z <= 0.0) {
+                        //     continue;
+                        // }
+
+                        const ASPECT_X: f32 = BUFFER_WIDTH as f32;
+                        const ASPECT_Y: f32 = -(BUFFER_HEIGHT as f32);
+                        const XOFF: f32 = BUFFER_WIDTH as f32 / 2.0;
+                        const YOFF: f32 = BUFFER_HEIGHT as f32 / 2.0;
+
+                        let modl = |p: &Vec3f| -> Vec3f {
+                            Vec3f {
+                                x: p.x + pos.x,
+                                y: p.y + pos.y,
+                                z: p.z + pos.z,
+                            }
+                        };
+                        let persp = |p: Vec3f| -> (f32, f32) {
+                            (
+                                p.x * scale / p.z * ASPECT_X + XOFF,
+                                p.y * scale / p.z * ASPECT_Y + YOFF,
+                            )
+                        };
+
+                        // print!("[{}]", p1.z + pos.z);
+
+                        let i = |p: &Vec3f| -> (i8, i8) {
+                            let (x, y) = persp(modl(p));
+                            (x as i8, y as i8)
+                        };
+
+                        let (x1, y1) = i(p1);
+                        let (x2, y2) = i(p2);
+                        let (x3, y3) = i(p3);
+
+                        if x1 < 0 || x1 > BUFFER_WIDTH as i8 {
+                            continue;
+                        }
+                        if x2 < 0 || x2 > BUFFER_WIDTH as i8 {
+                            continue;
+                        }
+                        if x2 < 0 || x2 > BUFFER_WIDTH as i8 {
+                            continue;
+                        }
+
+                        // println!("({},{})({},{})({},{})", x1, y1, x2, y2, x3, y3);
+
+                        self.lines[self.b][next_line + 0] = [x1, y1, x2, y2];
+                        self.lines[self.b][next_line + 1] = [x2, y2, x3, y3];
+                        self.lines[self.b][next_line + 2] = [x3, y3, x1, y1];
+
+                        next_line += 3;
+                    }
+                    Prim::Quad(_, _, _, _) => todo!(),
+                }
+            }
+        }
     }
 
-    pub fn draw(&self) {
-        draw_lines(self.even_lines, '#');
+    pub fn draw(&mut self) {
+        draw_lines(&self.lines[self.b ^ 1], ' ');
+        draw_lines(&self.lines[self.b], '#');
+        self.swap_buffer();
+        // clear_screen();
+
+        // let myplot = |x, y| {
+        //     if x < 0 || y < 0 {
+        //         return;
+        //     }
+        //     plot(
+        //         '|',
+        //         y as usize,
+        //         x as usize,
+        //         ColorCode::new(Color::LightCyan, Color::Black),
+        //     );
+        // };
+        // plot_line(&[5, 7, 20, 20], myplot);
+    }
+
+    pub fn key(&mut self, k: DecodedKey) {
+        match k {
+            // DecodedKey::RawKey(key_code) => todo!(),
+            DecodedKey::Unicode('a') => self.world[0].pos.x -= 1.0,
+            DecodedKey::Unicode('d') => self.world[0].pos.x += 1.0,
+            DecodedKey::Unicode('w') => self.world[0].pos.y += 1.0,
+            DecodedKey::Unicode('s') => self.world[0].pos.y -= 1.0,
+            DecodedKey::Unicode('u') => self.world[0].scale += 0.1,
+            DecodedKey::Unicode('p') => self.world[0].scale -= 0.1,
+            // DecodedKey::Unicode(_) => todo!(),
+            _ => {}
+        }
     }
 }
 
-fn draw_lines(lb: LineBank, linechar: char) {
+fn draw_lines(lb: &LineBank, linechar: char) {
     let myplot = |x, y| {
-        if x < 0 || y < 0 {
+        if x < 0 || y < 0 || x >= BUFFER_WIDTH as i32 || y >= BUFFER_HEIGHT as i32 {
             return;
         }
         plot(
             linechar,
-            y as usize,
             x as usize,
+            y as usize,
             ColorCode::new(Color::LightCyan, Color::Black),
         );
     };
     for l in lb {
-        if l != [0, 0, 0, 0] {
+        if l != &[0, 0, 0, 0] {
             plot_line(l, myplot);
         }
     }
@@ -74,14 +226,21 @@ fn draw_lines(lb: LineBank, linechar: char) {
 // Bresenham's line algorithm, adapted from:
 // https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
 
-pub fn plot_line([mut x1, mut y1, x2, y2]: Line, mut plot: impl FnMut(i8, i8)) {
-    let dx = x2.abs_diff(x1);
-    let dy = y1.abs_diff(y1);
+pub fn plot_line([x1, y1, x2, y2]: &Line, mut plot: impl FnMut(i32, i32)) {
+    let mut x1 = *x1 as i32;
+    let mut y1 = *y1 as i32;
+    let x2 = *x2 as i32;
+    let y2 = *y2 as i32;
+
+    let dx = i32::abs(x2 - x1);
+    let dy = -i32::abs(y2 - y1);
     let sx = if x1 < x2 { 1 } else { -1 };
     let sy = if y1 < y2 { 1 } else { -1 };
     let mut error = dx + dy;
 
-    loop {
+    let fuel = 40;
+
+    for _ in 0..fuel {
         plot(x1, y1);
         if x1 == x2 && y1 == y2 {
             break;
