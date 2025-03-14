@@ -1,7 +1,10 @@
-use core::mem::transmute;
+use core::{
+    mem::transmute,
+    ptr::{copy_nonoverlapping, slice_from_raw_parts},
+};
 
 use bootloader::BootInfo;
-use headers::{half_u32, parse_header_common, parse_header_type0, quarter_u32};
+use headers::{half_u16, half_u32, parse_header_common, parse_header_type0, quarter_u32};
 use io::{
     io_space_bar_read, io_space_bar_write, pci_config_modify, pci_config_read_u32,
     pci_config_read_word, pci_config_write_u32,
@@ -16,6 +19,9 @@ use crate::PhysAllocator;
 
 mod headers;
 mod io;
+
+static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/something_like_megaman2.raw");
+// static WAV_DATA: &[u8] = include_bytes!("../../../../../../Documents/snippet.raw");
 
 /*
 > 0x23AB88 - 0x1BB88
@@ -44,52 +50,89 @@ As well as other linked references
 */
 
 pub fn init_pci(phys_alloc: &mut PhysAllocator) {
+    let l = WAV_DATA.len();
+    println!("WOW! {} mebibytes!", l / 1024 / 1024);
+    debug_assert!(l % 2 == 0);
+    let wav_raw = slice_from_raw_parts::<i16>(WAV_DATA.as_ptr() as *const i16, l / 2);
+    let wav = unsafe { &*wav_raw };
+    debug_assert!(
+        WAV_DATA.len() == wav.len() * 2,
+        "{} != {}",
+        WAV_DATA.len(),
+        wav.len() * 2
+    );
+    debug_assert!({
+        // relies on little endian
+        let thing = (WAV_DATA[1] as u16) << 8 | WAV_DATA[0] as u16;
+        wav[0] == unsafe { transmute(thing) }
+    });
+
+    type BDL = [Volatile<BufferDescriptor>; 32];
+    let bdl = phys_alloc.alloc32::<BDL>();
+
+    // https://larsimmisch.github.io/pyalsaaudio/terminology.html
+    // Fixed by AC97 card
+    const NUM_BUFFERS: usize = 32;
+    const MAX_SAMPLES_PER_BUF: u16 = 0xFFFE;
+    // Defaults that we won't change
+    const SAMPLE_SIZE: usize = size_of::<i16>();
+    const NUM_CHANNELS: usize = 2;
+
+    // calculuation
+    const SAMPLES_PER_BUF: u16 = MAX_SAMPLES_PER_BUF;
+    const BYTES_PER_BUF: u32 = SAMPLES_PER_BUF as u32 * SAMPLE_SIZE as u32;
+    // const SAMPLES_PER_FRAME: usize = NUM_CHANNELS;
+    // const FRAMES_PER_BUF: usize = SAMPLES_PER_BUF as usize / SAMPLES_PER_FRAME;
+
+    const SAMPLES_IN_BLOB: usize = SAMPLES_PER_BUF as usize * NUM_BUFFERS;
+    type SamplesBlob = [Volatile<i16>; SAMPLES_IN_BLOB];
+
+    let samples_blob = phys_alloc.alloc32::<SamplesBlob>();
+
+    for i in 0..samples_blob.rw_virt.len() {
+        if i >= wav.len() {
+            break;
+        }
+        samples_blob.rw_virt[i] = Volatile::new(wav[i]);
+    }
+    for i in 0..NUM_BUFFERS {
+        bdl.rw_virt[i] = Volatile::new(BufferDescriptor {
+            physical_addr: samples_blob.r_phys + BYTES_PER_BUF * i as u32,
+            num_samples: SAMPLES_PER_BUF as u16,
+            control: 0,
+        })
+    }
+
     // check_all();
     let a = init_audio(phys_alloc).unwrap();
     // a.play();
 
-    println!("FREE: {}", phys_alloc.kb_free());
-
-    phys_alloc.alloc32::<u64>();
-
-    println!("FREE: {}", phys_alloc.kb_free());
-
-    const WAV_SAMPLES: usize = 0x1000;
-    type Frame = [Volatile<i16>; WAV_SAMPLES * 2];
-    let samples = phys_alloc.alloc32::<Frame>();
-    for i in 0..WAV_SAMPLES {
-        // let val = if i * 40000 < WAV_SAMPLES / 2 {
-        //     i16::MIN
-        // } else {
-        //     i16::MAX
-        // };
-
-        fn saw(i: usize) -> i16 {
-            const U: i32 = i16::MAX as i32;
-            const F: i32 = 100;
-            let tmp = ((i as i32) * 3 * F) % (U * 2) - U;
-            tmp as i16
-        }
-        // let val = (i as i16).wrapping_mul(79);
-        let val = saw(i);
-        samples.rw_virt[2 * i] = Volatile::new(val);
-        samples.rw_virt[2 * i + 1] = Volatile::new(val);
-    }
-
-    println!("FREE: {}", phys_alloc.kb_free());
-
-    type BDL = [Volatile<BufferDescriptor>; 32];
-    let bdl = phys_alloc.alloc32::<BDL>();
-    let bd = BufferDescriptor {
-        physical_addr: samples.r_phys,
-        num_samples: WAV_SAMPLES as u16,
-        control: 0,
-    };
-
-    for i in 0..32 {
-        bdl.rw_virt[i] = Volatile::new(bd.clone());
-    }
-
+    // const WAV_SAMPLES: usize = 0x1000;
+    // type Frame = [Volatile<i16>; WAV_SAMPLES * 2];
+    // let samples = phys_alloc.alloc32::<Frame>();
+    //
+    // for i in 0..WAV_SAMPLES {
+    //     fn saw(i: usize) -> i16 {
+    //         const U: i32 = i16::MAX as i32;
+    //         const F: i32 = 100;
+    //         let tmp = ((i as i32) * 3 * F) % (U * 2) - U;
+    //         tmp as i16
+    //     }
+    //     // let val = (i as i16).wrapping_mul(79);
+    //     let val = saw(i);
+    //     samples.rw_virt[2 * i] = Volatile::new(val);
+    //     samples.rw_virt[2 * i + 1] = Volatile::new(val);
+    // }
+    //
+    // let bd = BufferDescriptor {
+    //     physical_addr: samples.r_phys,
+    //     num_samples: WAV_SAMPLES as u16,
+    //     control: 0,
+    // };
+    // for i in 0..32 {
+    //     bdl.rw_virt[i] = Volatile::new(bd.clone());
+    // }
+    //
     println!("FREE: {}", phys_alloc.kb_free());
 
     a.play(bdl.r_phys);
@@ -252,7 +295,7 @@ impl AudioAc97 {
 
         // set volumes
         io_space_bar_write::<u16>(self.bar0 + 0x18, 0x0); //PCM
-        io_space_bar_write::<u16>(self.bar0 + 0x02, 0x2020); //Master
+        io_space_bar_write::<u16>(self.bar0 + 0x02, 0x0); //Master
 
         io_space_bar_write::<u16>(self.bar0 + 0x04, 0x2020); //Aux output
         for i in 0..100_000 {
@@ -314,8 +357,8 @@ impl AudioAc97 {
                 break;
             } else {
                 w += 1;
-                if w > 20 {
-                    break;
+                if w > 1 {
+                    // break;
                 }
                 let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
                 let z = io_space_bar_read::<u16>(self.bar1 + 0x18);
