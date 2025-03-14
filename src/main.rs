@@ -3,6 +3,7 @@
 
 mod pci;
 
+use bootloader::BootInfo;
 use crossbeam::atomic::AtomicCell;
 use pc_keyboard::DecodedKey;
 use pci::init_pci;
@@ -10,7 +11,8 @@ use pluggable_interrupt_os::{println, vga_buffer::clear_screen, HandlerTable};
 use pluggable_interrupt_template::LetterMover;
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start(boot_info: &'static mut BootInfo) -> ! {
+    BOOT_INFO.store(Some(boot_info));
     HandlerTable::new()
         .keyboard(key)
         .timer(tick)
@@ -21,9 +23,11 @@ pub extern "C" fn _start() -> ! {
 
 static LAST_KEY: AtomicCell<Option<DecodedKey>> = AtomicCell::new(None);
 static TICKED: AtomicCell<bool> = AtomicCell::new(false);
+static BOOT_INFO: AtomicCell<Option<&'static BootInfo>> = AtomicCell::new(None);
 
 fn cpu_loop() -> ! {
-    init_pci();
+    let b = BOOT_INFO.load().unwrap();
+    init_pci(b);
     loop {
         if let Ok(_) = TICKED.compare_exchange(true, false) {
             // println!("Ticked!")

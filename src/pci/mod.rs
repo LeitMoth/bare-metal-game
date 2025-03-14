@@ -1,5 +1,6 @@
 use core::mem::transmute;
 
+use bootloader::BootInfo;
 use headers::{half_u32, parse_header_common, parse_header_type0, quarter_u32};
 use io::{
     io_space_bar_read, io_space_bar_write, pci_config_modify, pci_config_read_u32,
@@ -20,9 +21,9 @@ And some: https://wiki.osdev.org/AC97
 As well as other linked references
 */
 
-pub fn init_pci() {
+pub fn init_pci(boot_info: &'static BootInfo) {
     // check_all();
-    let a = init_audio().unwrap();
+    let a = init_audio(boot_info).unwrap();
     a.play();
 }
 
@@ -75,6 +76,7 @@ lazy_static! {
 
 #[derive(Debug)]
 struct AudioAc97 {
+    phys_mem_offset: u64,
     bus: u8,
     slot: u8,
     // reset, device selection, volume control
@@ -167,8 +169,11 @@ impl AudioAc97 {
         //     }
         // }
         let raw_addr: *mut [Volatile<BufferDescriptor>; 32] = &raw mut *l;
-        debug_assert!(raw_addr as usize <= u32::MAX as usize);
-        let addr_truncated = raw_addr as u32;
+        println!("RAW      {:#018X}", raw_addr as u64);
+        println!("RAW PHYS {:#018X}", raw_addr as u64 + self.phys_mem_offset);
+        let raw_phys_addr = raw_addr as u64 + self.phys_mem_offset;
+        debug_assert!(raw_phys_addr as usize <= u32::MAX as usize);
+        let addr_truncated = raw_phys_addr as u32;
         println!("BDL^{:#X}", addr_truncated);
         for i in 0..64 {
             let h = (addr_truncated + i * 2) as *const u16;
@@ -184,6 +189,8 @@ impl AudioAc97 {
         io_space_bar_write::<u8>(address_last_valid_idx, 10);
 
         io_space_bar_write::<u16>(self.bar1 + 0x16, 0x1C);
+
+        // loop {}
 
         // IMPORTANT:
         // This is the line that gives Qemu a "volume meter" in pavucontrol
@@ -203,8 +210,8 @@ impl AudioAc97 {
                 break;
             } else {
                 w += 1;
-                if w > 0 {
-                    // break;
+                if w > 10 {
+                    break;
                 }
                 let y = io_space_bar_read::<u8>(self.bar1 + 0x14);
                 let z = io_space_bar_read::<u16>(self.bar1 + 0x18);
@@ -218,7 +225,7 @@ impl AudioAc97 {
     }
 }
 
-fn init_audio() -> Option<AudioAc97> {
+fn init_audio(boot_info: &'static BootInfo) -> Option<AudioAc97> {
     let mut audio = None;
 
     for bus in 0..=255 {
@@ -264,7 +271,9 @@ fn init_audio() -> Option<AudioAc97> {
                         println!("I {} {}", pin, line,);
                     }
 
+                    // let x = boot_info.physical_memory_offset;
                     audio = Some(AudioAc97 {
+                        phys_mem_offset: boot_info.physical_memory_offset,
                         bus,
                         slot: device,
                         bar0: (full_header.base_addresses[0] & 0xFFFFFFFC) as u16,
